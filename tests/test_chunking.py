@@ -3,7 +3,7 @@
 Tests for hierarchical document chunking.
 """
 import pytest
-from scripts.chunking import HierarchicalChunker, Section
+from tei_chunker.chunking import HierarchicalChunker, Section
 
 
 @pytest.fixture
