@@ -1,6 +1,7 @@
 """
 Tests for hierarchical document chunking.
 """
+
 import pytest
 from tei_chunker.chunking import HierarchicalChunker, Section
 
@@ -8,7 +9,7 @@ from tei_chunker.chunking import HierarchicalChunker, Section
 @pytest.fixture
 def sample_xml():
     """Create a sample XML document."""
-    return '''<?xml version="1.0" encoding="UTF-8"?>
+    return """<?xml version="1.0" encoding="UTF-8"?>
 <TEI xmlns="http://www.tei-c.org/ns/1.0">
     <teiHeader>
         <fileDesc>
@@ -43,7 +44,7 @@ def sample_xml():
             </div>
         </body>
     </text>
-</TEI>'''
+</TEI>"""
 
 
 @pytest.fixture
@@ -54,12 +55,7 @@ def chunker():
 
 def test_section_creation():
     """Test basic section object creation."""
-    section = Section(
-        title="Test",
-        content="Content",
-        level=1,
-        subsections=[]
-    )
+    section = Section(title="Test", content="Content", level=1, subsections=[])
     assert section.title == "Test"
     assert section.content == "Content"
     assert section.level == 1
@@ -69,19 +65,13 @@ def test_section_creation():
 def test_section_hierarchy():
     """Test section hierarchy handling."""
     subsection = Section(
-        title="Subsection",
-        content="Sub content",
-        level=2,
-        subsections=[]
+        title="Subsection", content="Sub content", level=2, subsections=[]
     )
     section = Section(
-        title="Main",
-        content="Main content",
-        level=1,
-        subsections=[subsection]
+        title="Main", content="Main content", level=1, subsections=[subsection]
     )
     subsection.parent = section
-    
+
     assert section.subsections[0] == subsection
     assert subsection.parent == section
     assert "Main" in section.full_content
@@ -91,10 +81,10 @@ def test_section_hierarchy():
 def test_parse_xml(chunker, sample_xml):
     """Test XML parsing into sections."""
     sections = chunker.parse_grobid_xml(sample_xml)
-    
+
     # Check top-level sections
     assert len(sections) >= 2  # Introduction and Methods
-    
+
     # Check Introduction section
     intro = next((s for s in sections if s.title == "Introduction"), None)
     assert intro is not None
@@ -119,7 +109,7 @@ def test_chunking_small_document(chunker):
             title="Small Section",
             content="This is a small section.",
             level=1,
-            subsections=[]
+            subsections=[],
         )
     ]
     chunks = chunker.chunk_document(sections)
@@ -132,12 +122,7 @@ def test_chunking_large_section(chunker):
     chunker.max_chunk_size = 100  # Set a very small chunk size
     large_content = "word " * 200  # ~1000 characters
     sections = [
-        Section(
-            title="Large Section",
-            content=large_content,
-            level=1,
-            subsections=[]
-        )
+        Section(title="Large Section", content=large_content, level=1, subsections=[])
     ]
     chunks = chunker.chunk_document(sections)
     assert len(chunks) > 1
@@ -152,19 +137,9 @@ def test_chunking_with_subsections(chunker):
             content="Main content",
             level=1,
             subsections=[
-                Section(
-                    title="Sub A",
-                    content="A content",
-                    level=2,
-                    subsections=[]
-                ),
-                Section(
-                    title="Sub B",
-                    content="B content",
-                    level=2,
-                    subsections=[]
-                )
-            ]
+                Section(title="Sub A", content="A content", level=2, subsections=[]),
+                Section(title="Sub B", content="B content", level=2, subsections=[]),
+            ],
         )
     ]
     chunks = chunker.chunk_document(sections)
