@@ -196,71 +196,67 @@ class HierarchicalChunker:
 
         def process_section(section: Section):
             """Process a single section and its subsections."""
-            nonlocal current_chunk, current_size
+            nonlocal current_chunk, current_size, chunks
 
             section_content = section.full_content
             section_size = len(section_content)
 
-            # Check if section should be split
-            if current_size + section_size > self.max_chunk_size:
-                # If section itself is too large
-                if section_size > self.max_chunk_size:
-                    if current_chunk:
-                        chunks.append("\n\n".join(current_chunk))
-                        current_chunk = []
-                        current_size = 0
+            # If current section is too large to fit in a single chunk
+            if section_size > self.max_chunk_size:
+                # First, add any existing content as a chunk
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                    current_chunk = []
+                    current_size = 0
 
-                    # Add section content if substantial
-                    if len(section.content) > self.min_section_size:
-                        section_text = (
-                            f"{'#' * section.level} {section.title}\n\n"
-                            f"{section.content}"
-                        )
-                        current_chunk.append(section_text)
-                        current_size = len(section_text)
+                # Split section content into chunks
+                words = section_content.split()
+                current_words = []
+                current_word_size = 0
 
-                        if current_size >= self.max_chunk_size:
-                            chunks.append("\n\n".join(current_chunk))
-                            current_chunk = []
-                            current_size = 0
+                for word in words:
+                    word_size = len(word) + 1  # +1 for space
+                    if current_word_size + word_size > self.max_chunk_size:
+                        if current_words:  # Create chunk from accumulated words
+                            chunk_text = " ".join(current_words)
+                            chunks.append(chunk_text)
+                            # Keep some overlap
+                            overlap_words = current_words[-self.overlap_size // 10:]  # Approximate words for overlap
+                            current_words = overlap_words + [word]
+                            current_word_size = sum(len(w) + 1 for w in current_words)
+                    else:
+                        current_words.append(word)
+                        current_word_size += word_size
 
-                    # Process subsections
-                    for subsection in section.subsections:
-                        process_section(subsection)
+                # Add remaining words if any
+                if current_words:
+                    chunks.append(" ".join(current_words))
 
-                else:
-                    # Create new chunk with overlap
-                    if current_chunk:
-                        # Find appropriate overlap point
-                        chunk_text = "\n\n".join(current_chunk)
-                        last_period = chunk_text.rfind(". ", -self.overlap_size)
-                        if last_period > 0:
-                            overlap_text = chunk_text[last_period + 2 :]
-                        else:
-                            overlap_text = chunk_text[-self.overlap_size :]
-
-                        chunks.append(chunk_text)
-                        current_chunk = [overlap_text]
-                        current_size = len(overlap_text)
-
-                    current_chunk.append(section_content)
-                    current_size += section_size
-            else:
-                # Add to current chunk
+            # If section can fit in current chunk with room
+            elif current_size + section_size <= self.max_chunk_size:
                 current_chunk.append(section_content)
                 current_size += section_size
+
+            # If section needs a new chunk
+            else:
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                current_chunk = [section_content]
+                current_size = section_size
+
+            # Process subsections
+            for subsection in section.subsections:
+                process_section(subsection)
 
         # Process all top-level sections
         for section in sections:
             process_section(section)
 
-        # Add final chunk if exists and not already added
+        # Add final chunk if it exists
         if current_chunk:
-            final_chunk = "\n\n".join(current_chunk)
-            if not chunks or chunks[-1] != final_chunk:
-                chunks.append(final_chunk)
+            chunks.append("\n\n".join(current_chunk))
 
-        return chunks
+        return [chunk for chunk in chunks if chunk.strip()]
 
     def get_section_structure(self, sections: List[Section], indent: str = "") -> str:
         """
