@@ -26,40 +26,52 @@ jobs:
         python-version: ["3.12"]
 
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install .[dev]
-    
-    - name: Format with black
-      run: black tei_chunker tests
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .[dev]
+      
+      - name: Format with black
+        run: black tei_chunker tests
 
-    - name: Commit format changes
-      uses: stefanzweifel/git-auto-commit-action@v5
-      with:
-        commit_message: "style: auto-format with black"
-        file_pattern: "*.py"
-    
-    - name: Run type checking (informational)
-      continue-on-error: true
-      run: |
-        echo "=== mypy Type Check Report ===" >> $GITHUB_STEP_SUMMARY
-        mypy tei_chunker --pretty | tee -a $GITHUB_STEP_SUMMARY || true
-    
-    - name: Run linting (informational)
-      continue-on-error: true
-      run: |
-        echo "=== Ruff Lint Report ===" >> $GITHUB_STEP_SUMMARY
-        ruff check tei_chunker | tee -a $GITHUB_STEP_SUMMARY || true
-    
-    - name: Run tests
-      run: |
-        pytest tests/ --cov=tei_chunker
+      - name: Auto-fix linting issues with ruff
+        run: |
+          ruff --fix .
+      
+      - name: Commit auto-fix changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: auto-fix linting issues with ruff"
+          file_pattern: "**/*.{py,md,yml}"  # adjust as needed
+      
+      - name: Run type checking (informational)
+        continue-on-error: true
+        run: |
+          echo "=== mypy Type Check Report ===" >> $GITHUB_STEP_SUMMARY
+          mypy tei_chunker --pretty | tee -a $GITHUB_STEP_SUMMARY || true
+      
+      - name: Run linting (informational)
+        continue-on-error: true
+        run: |
+          echo "=== Ruff Lint Report ===" >> $GITHUB_STEP_SUMMARY
+          ruff check tei_chunker | tee -a $GITHUB_STEP_SUMMARY || true
+      
+      - name: Run tests
+        run: |
+          pytest tests/ --cov=tei_chunker
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: true
