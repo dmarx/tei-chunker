@@ -182,7 +182,6 @@ class HierarchicalChunker:
 
         return sections
 
-
     def chunk_document(self, sections: List[Section]) -> List[str]:
         """
         Create chunks while respecting section boundaries.
