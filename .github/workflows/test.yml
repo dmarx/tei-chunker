@@ -1,7 +1,6 @@
 name: Tests
 
 on:
-  workflow_dispatch:
   push:
     branches: [ main ]
     paths-ignore:
@@ -15,13 +14,16 @@ on:
       - 'docs/**'
       - '.gitignore'
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.12"]
-        #python-version: ["3.8", "3.9", "3.10", "3.11"]
 
     steps:
     - uses: actions/checkout@v4
@@ -38,14 +40,14 @@ jobs:
         pip install .[dev]
     
     - name: Format with black
-      run: |
-        black tei_chunker tests
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
-        git add .
-        git diff --quiet && git diff --staged --quiet || git commit -m "style: auto-format with black"
-        git push
+      run: black tei_chunker tests
 
+    - name: Commit format changes
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "style: auto-format with black"
+        file_pattern: "*.py"
+    
     - name: Run type checking (informational)
       continue-on-error: true
       run: |
@@ -62,15 +64,10 @@ jobs:
       run: |
         pytest tests/ --cov=tei_chunker
     
-    # - name: Upload coverage to Codecov
-    #   uses: codecov/codecov-action@v3
-    #   with:
-    #     file: ./coverage.xml
-    #     flags: unittests
-    #     name: codecov-umbrella
-    #     fail_ci_if_error: true
-
-    # Only run push if we're on the main branch and there are changes
-    - name: Push changes
-      if: github.ref == 'refs/heads/main'
-      run: git push
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: true
