@@ -1,6 +1,9 @@
 # tei-chunker
 Document chunker specialized for TEI XML (i.e. GROBID outputs from academic PDF parsing)
 
+https://www.tei-c.org/  
+https://github.com/kermitt2/grobid
+
 ```
 tei-chunker/
 ├── .github/
