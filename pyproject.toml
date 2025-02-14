@@ -51,10 +51,8 @@ Documentation = "https://github.com/yourusername/tei-chunker#readme"
 [tool.hatch.version]
 path = "tei_chunker/__about__.py"
 
-[tool.hatch.build.targets.sdist]
-include = [
-    "/tei_chunker",
-]
+[tool.hatch.build.targets.wheel]
+packages = ["tei_chunker"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=tei_chunker --cov-report=term-missing"
