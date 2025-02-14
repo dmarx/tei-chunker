@@ -3,16 +3,20 @@
 Hierarchical document chunking based on XML structure.
 """
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict
 import xml.etree.ElementTree as ET
 from loguru import logger
+
+
+# Define TEI namespace
+NS = {'tei': 'http://www.tei-c.org/ns/1.0'}
 
 
 @dataclass
 class Section:
     """
     Represents a document section with hierarchical structure.
-
+    
     Args:
         title: Section title
         content: Direct content of this section (excluding subsections)
@@ -20,7 +24,6 @@ class Section:
         subsections: List of child sections
         parent: Parent section (None for top-level sections)
     """
-
     title: str
     content: str
     level: int
@@ -47,7 +50,6 @@ class Section:
 class HierarchicalChunker:
     """
     Chunks documents while respecting their hierarchical structure.
-
     Args:
         max_chunk_size: Maximum size in characters for each chunk
         overlap_size: Number of characters to overlap between chunks
@@ -64,10 +66,9 @@ class HierarchicalChunker:
     def parse_grobid_xml(self, xml_content: str) -> List[Section]:
         """
         Parse GROBID XML into hierarchical sections.
-
+        
         Args:
             xml_content: Raw XML string from GROBID
-
         Returns:
             List of top-level sections with their subsections
         """
@@ -76,7 +77,7 @@ class HierarchicalChunker:
             sections = []
 
             # Process abstract if present
-            abstract = root.find(".//abstract")
+            abstract = root.find('.//tei:abstract', NS)
             if abstract is not None:
                 abstract_text = self._get_element_text(abstract)
                 if abstract_text:
@@ -90,7 +91,7 @@ class HierarchicalChunker:
                     )
 
             # Process main body
-            body = root.find(".//body")
+            body = root.find('.//tei:body', NS)
             if body is not None:
                 sections.extend(self._process_divs(body))
 
@@ -102,6 +103,9 @@ class HierarchicalChunker:
 
     def _get_element_text(self, element: ET.Element) -> str:
         """Extract all text content from an element, preserving structure."""
+        if element is None:
+            return ""
+
         parts = []
 
         # Handle direct text
@@ -111,11 +115,11 @@ class HierarchicalChunker:
         # Process child elements
         for child in element:
             # Special handling for formulas
-            if child.tag == "formula":
+            if child.tag.endswith('formula'):
                 formula_text = child.text if child.text else ""
                 parts.append(f"$${formula_text}$$")
             # Handle references
-            elif child.tag == "ref":
+            elif child.tag.endswith('ref'):
                 ref_text = child.text if child.text else ""
                 parts.append(f"[{ref_text}]")
             # Regular text content
@@ -133,24 +137,23 @@ class HierarchicalChunker:
     def _process_divs(self, element: ET.Element, level: int = 1) -> List[Section]:
         """
         Recursively process div elements into sections.
-
+        
         Args:
             element: XML element to process
             level: Current heading level
-
         Returns:
             List of sections from this element
         """
         sections = []
 
-        for div in element.findall("./div"):
+        for div in element.findall('.//tei:div', NS):
             # Get section heading
-            head = div.find("./head")
+            head = div.find('./tei:head', NS)
             title = head.text if head is not None and head.text else "Untitled Section"
 
             # Get immediate paragraph content
             paragraphs = []
-            for p in div.findall("./p"):
+            for p in div.findall('./tei:p', NS):
                 text = self._get_element_text(p)
                 if text:
                     paragraphs.append(text)
@@ -176,13 +179,15 @@ class HierarchicalChunker:
     def chunk_document(self, sections: List[Section]) -> List[str]:
         """
         Create chunks while respecting section boundaries.
-
+        
         Args:
             sections: List of document sections
-
         Returns:
             List of text chunks
         """
+        if not sections:
+            return []
+
         chunks = []
         current_chunk = []
         current_size = 0
@@ -228,9 +233,9 @@ class HierarchicalChunker:
                         chunk_text = "\n\n".join(current_chunk)
                         last_period = chunk_text.rfind(". ", -self.overlap_size)
                         if last_period > 0:
-                            overlap_text = chunk_text[last_period + 2 :]
+                            overlap_text = chunk_text[last_period + 2:]
                         else:
-                            overlap_text = chunk_text[-self.overlap_size :]
+                            overlap_text = chunk_text[-self.overlap_size:]
 
                         chunks.append(chunk_text)
                         current_chunk = [overlap_text]
@@ -247,9 +252,11 @@ class HierarchicalChunker:
         for section in sections:
             process_section(section)
 
-        # Add final chunk
+        # Add final chunk if exists and not already added
         if current_chunk:
-            chunks.append("\n\n".join(current_chunk))
+            final_chunk = "\n\n".join(current_chunk)
+            if not chunks or chunks[-1] != final_chunk:
+                chunks.append(final_chunk)
 
         return chunks
 
@@ -260,7 +267,6 @@ class HierarchicalChunker:
         Args:
             sections: List of sections to outline
             indent: Current indentation string
-
         Returns:
             Formatted string showing document structure
         """
