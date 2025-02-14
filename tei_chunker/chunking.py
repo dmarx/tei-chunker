@@ -148,27 +148,31 @@ class HierarchicalChunker:
         """
         sections = []
 
-        for div in element.findall(".//tei:div", NS):
+        for div in element.findall("./tei:div", NS):
             # Get section heading
             head = div.find("./tei:head", NS)
             title = head.text if head is not None and head.text else "Untitled Section"
 
-            # Get immediate paragraph content
-            paragraphs = []
-            for p in div.findall("./tei:p", NS):
-                text = self._get_element_text(p)
-                if text:
-                    paragraphs.append(text)
+            # Gather content from child elements in order (p and formula)
+            content_parts = []
+            for child in div:
+                tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if tag in ["p", "formula"]:
+                    text = self._get_element_text(child)
+                    if text:
+                        content_parts.append(text)
+                # Skip head and nested div (handled later)
+                # You might also want to handle other tags here if needed.
 
             # Create section
             section = Section(
                 title=title,
-                content="\n\n".join(paragraphs),
+                content="\n\n".join(content_parts),
                 level=level,
                 subsections=[],
             )
 
-            # Process subsections
+            # Process subsections (nested divs)
             subsections = self._process_divs(div, level + 1)
             section.subsections = subsections
             for subsection in subsections:
@@ -177,6 +181,7 @@ class HierarchicalChunker:
             sections.append(section)
 
         return sections
+
 
     def chunk_document(self, sections: List[Section]) -> List[str]:
         """
