@@ -9,14 +9,14 @@ from loguru import logger
 
 
 # Define TEI namespace
-NS = {'tei': 'http://www.tei-c.org/ns/1.0'}
+NS = {"tei": "http://www.tei-c.org/ns/1.0"}
 
 
 @dataclass
 class Section:
     """
     Represents a document section with hierarchical structure.
-    
+
     Args:
         title: Section title
         content: Direct content of this section (excluding subsections)
@@ -24,6 +24,7 @@ class Section:
         subsections: List of child sections
         parent: Parent section (None for top-level sections)
     """
+
     title: str
     content: str
     level: int
@@ -66,7 +67,7 @@ class HierarchicalChunker:
     def parse_grobid_xml(self, xml_content: str) -> List[Section]:
         """
         Parse GROBID XML into hierarchical sections.
-        
+
         Args:
             xml_content: Raw XML string from GROBID
         Returns:
@@ -77,7 +78,7 @@ class HierarchicalChunker:
             sections = []
 
             # Process abstract if present
-            abstract = root.find('.//tei:abstract', NS)
+            abstract = root.find(".//tei:abstract", NS)
             if abstract is not None:
                 abstract_text = self._get_element_text(abstract)
                 if abstract_text:
@@ -91,7 +92,7 @@ class HierarchicalChunker:
                     )
 
             # Process main body
-            body = root.find('.//tei:body', NS)
+            body = root.find(".//tei:body", NS)
             if body is not None:
                 sections.extend(self._process_divs(body))
 
@@ -115,11 +116,11 @@ class HierarchicalChunker:
         # Process child elements
         for child in element:
             # Special handling for formulas
-            if child.tag.endswith('formula'):
+            if child.tag.endswith("formula"):
                 formula_text = child.text if child.text else ""
                 parts.append(f"$${formula_text}$$")
             # Handle references
-            elif child.tag.endswith('ref'):
+            elif child.tag.endswith("ref"):
                 ref_text = child.text if child.text else ""
                 parts.append(f"[{ref_text}]")
             # Regular text content
@@ -137,7 +138,7 @@ class HierarchicalChunker:
     def _process_divs(self, element: ET.Element, level: int = 1) -> List[Section]:
         """
         Recursively process div elements into sections.
-        
+
         Args:
             element: XML element to process
             level: Current heading level
@@ -146,14 +147,14 @@ class HierarchicalChunker:
         """
         sections = []
 
-        for div in element.findall('.//tei:div', NS):
+        for div in element.findall(".//tei:div", NS):
             # Get section heading
-            head = div.find('./tei:head', NS)
+            head = div.find("./tei:head", NS)
             title = head.text if head is not None and head.text else "Untitled Section"
 
             # Get immediate paragraph content
             paragraphs = []
-            for p in div.findall('./tei:p', NS):
+            for p in div.findall("./tei:p", NS):
                 text = self._get_element_text(p)
                 if text:
                     paragraphs.append(text)
@@ -179,7 +180,7 @@ class HierarchicalChunker:
     def chunk_document(self, sections: List[Section]) -> List[str]:
         """
         Create chunks while respecting section boundaries.
-        
+
         Args:
             sections: List of document sections
         Returns:
@@ -233,9 +234,9 @@ class HierarchicalChunker:
                         chunk_text = "\n\n".join(current_chunk)
                         last_period = chunk_text.rfind(". ", -self.overlap_size)
                         if last_period > 0:
-                            overlap_text = chunk_text[last_period + 2:]
+                            overlap_text = chunk_text[last_period + 2 :]
                         else:
-                            overlap_text = chunk_text[-self.overlap_size:]
+                            overlap_text = chunk_text[-self.overlap_size :]
 
                         chunks.append(chunk_text)
                         current_chunk = [overlap_text]
