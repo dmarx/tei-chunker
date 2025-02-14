@@ -13,7 +13,7 @@ jobs:
     # Define the chunking service
     services:
       chunker:
-        image: ghcr.io/yourusername/tei-chunker:latest
+        image: ghcr.io/dmarx/tei-chunker:latest
         ports:
           - 8000:8000
         # Mount documents directory
