@@ -6,6 +6,7 @@ import pytest
 from pathlib import Path
 from scripts.document import Paper
 
+
 @pytest.fixture
 def test_data_dir(tmp_path):
     """Create a test data directory structure."""
@@ -13,21 +14,23 @@ def test_data_dir(tmp_path):
     data_dir.mkdir()
     return data_dir
 
+
 @pytest.fixture
 def test_paper(test_data_dir):
     """Create a test paper with basic structure."""
     paper_dir = test_data_dir / "2101.00123"
     paper_dir.mkdir()
-    
+
     features_dir = paper_dir / "features"
     features_dir.mkdir()
-    
+
     return Paper("2101.00123", data_dir=test_data_dir)
+
 
 @pytest.fixture
 def sample_xml_content():
     """Create sample XML content for testing."""
-    return '''<?xml version="1.0" encoding="UTF-8"?>
+    return """<?xml version="1.0" encoding="UTF-8"?>
 <TEI xmlns="http://www.tei-c.org/ns/1.0">
     <teiHeader>
         <fileDesc>
@@ -49,4 +52,4 @@ def sample_xml_content():
             </div>
         </body>
     </text>
-</TEI>'''
+</TEI>"""

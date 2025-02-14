@@ -5,10 +5,11 @@ Tests for hierarchical document chunking.
 import pytest
 from scripts.chunking import HierarchicalChunker, Section
 
+
 @pytest.fixture
 def sample_xml():
     """Create a sample XML document."""
-    return '''<?xml version="1.0" encoding="UTF-8"?>
+    return """<?xml version="1.0" encoding="UTF-8"?>
 <TEI xmlns="http://www.tei-c.org/ns/1.0">
     <teiHeader>
         <fileDesc>
@@ -43,71 +44,66 @@ def sample_xml():
             </div>
         </body>
     </text>
-</TEI>'''
+</TEI>"""
+
 
 @pytest.fixture
 def chunker():
     """Create a chunker instance."""
     return HierarchicalChunker(max_chunk_size=500, overlap_size=50)
 
+
 def test_section_creation():
     """Test basic section object creation."""
-    section = Section(
-        title="Test",
-        content="Content",
-        level=1,
-        subsections=[]
-    )
+    section = Section(title="Test", content="Content", level=1, subsections=[])
     assert section.title == "Test"
     assert section.content == "Content"
     assert section.level == 1
     assert len(section.subsections) == 0
 
+
 def test_section_hierarchy():
     """Test section hierarchy handling."""
     subsection = Section(
-        title="Subsection",
-        content="Sub content",
-        level=2,
-        subsections=[]
+        title="Subsection", content="Sub content", level=2, subsections=[]
     )
     section = Section(
-        title="Main",
-        content="Main content",
-        level=1,
-        subsections=[subsection]
+        title="Main", content="Main content", level=1, subsections=[subsection]
     )
     subsection.parent = section
-    
+
     assert section.subsections[0] == subsection
     assert subsection.parent == section
     assert "Main" in section.full_content
     assert "Sub content" in section.full_content
 
+
 def test_parse_xml(chunker, sample_xml):
     """Test XML parsing into sections."""
     sections = chunker.parse_grobid_xml(sample_xml)
-    
+
     # Check top-level sections
     assert len(sections) == 2  # Introduction and Methods
-    
+
     # Check Introduction section
     intro = sections[0]
     assert intro.title == "Introduction"
     assert "introduction paragraph" in intro.content
     assert len(intro.subsections) == 1  # Background
-    
+
     # Check Methods section
     methods = sections[1]
     assert methods.title == "Methods"
     assert len(methods.subsections) == 2  # Data Collection and Analysis
+
 
 def test_formula_handling(chunker, sample_xml):
     """Test handling of mathematical formulas."""
     sections = chunker.parse_grobid_xml(sample_xml)
     background = sections[0].subsections[0]
     assert "E = mc^2" in background.content
-    
+
+
 def test_chunking_small_document(chunker):
     """Test chunking of a document smaller than chunk size."""
     sections = [
@@ -115,28 +111,25 @@ def test_chunking_small_document(chunker):
             title="Small Section",
             content="This is a small section.",
             level=1,
-            subsections=[]
+            subsections=[],
         )
     ]
     chunks = chunker.chunk_document(sections)
     assert len(chunks) == 1
     assert "Small Section" in chunks[0]
 
+
 def test_chunking_large_section(chunker):
     """Test chunking of a section larger than chunk size."""
     # Create a section with 1000 character content
     large_content = "word " * 200  # ~1000 characters
     sections = [
-        Section(
-            title="Large Section",
-            content=large_content,
-            level=1,
-            subsections=[]
-        )
+        Section(title="Large Section", content=large_content, level=1, subsections=[])
     ]
     chunks = chunker.chunk_document(sections)
     assert len(chunks) > 1
     assert all("Large Section" in chunk for chunk in chunks)
+
 
 def test_chunking_with_subsections(chunker):
     """Test chunking with hierarchical sections."""
@@ -146,19 +139,9 @@ def test_chunking_with_subsections(chunker):
             content="Main content",
             level=1,
             subsections=[
-                Section(
-                    title="Sub A",
-                    content="A content",
-                    level=2,
-                    subsections=[]
-                ),
-                Section(
-                    title="Sub B",
-                    content="B content",
-                    level=2,
-                    subsections=[]
-                )
-            ]
+                Section(title="Sub A", content="A content", level=2, subsections=[]),
+                Section(title="Sub B", content="B content", level=2, subsections=[]),
+            ],
         )
     ]
     chunks = chunker.chunk_document(sections)
@@ -166,11 +149,13 @@ def test_chunking_with_subsections(chunker):
     assert any("Sub A" in chunk for chunk in chunks)
     assert any("Sub B" in chunk for chunk in chunks)
 
+
 def test_invalid_xml(chunker):
     """Test handling of invalid XML."""
     invalid_xml = "<invalid>xml"
     sections = chunker.parse_grobid_xml(invalid_xml)
     assert len(sections) == 0
+
 
 def test_empty_sections(chunker):
     """Test handling of empty sections."""
