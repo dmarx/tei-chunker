@@ -4,7 +4,6 @@ Shared test fixtures.
 """
 import pytest
 from pathlib import Path
-from scripts.document import Paper
 
 
 @pytest.fixture
