@@ -221,7 +221,9 @@ class HierarchicalChunker:
                             chunk_text = " ".join(current_words)
                             chunks.append(chunk_text)
                             # Keep some overlap
-                            overlap_words = current_words[-self.overlap_size // 10:]  # Approximate words for overlap
+                            overlap_words = current_words[
+                                -self.overlap_size // 10 :
+                            ]  # Approximate words for overlap
                             current_words = overlap_words + [word]
                             current_word_size = sum(len(w) + 1 for w in current_words)
                     else:
