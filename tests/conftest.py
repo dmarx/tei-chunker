@@ -14,16 +14,16 @@ def test_data_dir(tmp_path):
     return data_dir
 
 
-@pytest.fixture
-def test_paper(test_data_dir):
-    """Create a test paper with basic structure."""
-    paper_dir = test_data_dir / "2101.00123"
-    paper_dir.mkdir()
+# @pytest.fixture
+# def test_paper(test_data_dir):
+#     """Create a test paper with basic structure."""
+#     paper_dir = test_data_dir / "2101.00123"
+#     paper_dir.mkdir()
 
-    features_dir = paper_dir / "features"
-    features_dir.mkdir()
+#     features_dir = paper_dir / "features"
+#     features_dir.mkdir()
 
-    return Paper("2101.00123", data_dir=test_data_dir)
+#     return Paper("2101.00123", data_dir=test_data_dir)
 
 
 @pytest.fixture
