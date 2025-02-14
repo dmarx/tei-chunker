@@ -115,13 +115,14 @@ class HierarchicalChunker:
 
         # Process child elements
         for child in element:
+            tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
             # Special handling for formulas
-            if child.tag.endswith("formula"):
-                formula_text = child.text if child.text else ""
+            if tag == 'formula':
+                formula_text = child.text.strip() if child.text else ""
                 parts.append(f"$${formula_text}$$")
             # Handle references
-            elif child.tag.endswith("ref"):
-                ref_text = child.text if child.text else ""
+            elif tag == 'ref':
+                ref_text = child.text.strip() if child.text else ""
                 parts.append(f"[{ref_text}]")
             # Regular text content
             else:
