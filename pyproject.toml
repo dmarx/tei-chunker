@@ -49,7 +49,7 @@ Repository = "https://github.com/yourusername/tei-chunker"
 Documentation = "https://github.com/yourusername/tei-chunker#readme"
 
 [tool.hatch.version]
-source = "git"
+path = "tei_chunker/__about__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["tei_chunker"]
