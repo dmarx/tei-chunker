@@ -217,6 +217,82 @@ def test_feature_manager_error_handling(
     """Test error handling in feature manager."""
     content = "Test content"
     
-    # Create failing LLM client
     class FailingLLMClient:
-        def complete(self, prompt: str) -> str
+        def complete(self, prompt: str) -> str:
+            raise ValueError("LLM processing failed")
+            
+    with pytest.raises(Exception) as exc_info:
+        feature_manager.process_request(
+            content,
+            sample_request,
+            FailingLLMClient()
+        )
+    
+    assert "LLM processing failed" in str(exc_info.value)
+
+def test_feature_persistence(feature_manager, sample_request):
+    """Test feature persistence across manager instances."""
+    content = "Test content"
+    llm_client = MockLLMClient()
+    
+    # Process feature with first manager
+    feature = feature_manager.process_request(
+        content,
+        sample_request,
+        llm_client
+    )
+    
+    # Create new manager instance
+    new_manager = FeatureManager(
+        feature_manager.store.storage_dir,
+        xml_processor=None
+    )
+    
+    # Check feature was loaded
+    features = new_manager.store.get_features(feature.name)
+    assert len(features) == 1
+    assert features[0].content == feature.content
+    
+def test_feature_graph(feature_manager):
+    """Test getting feature dependency graph."""
+    # Add features with complex dependencies
+    features = [
+        Feature(
+            name="base",
+            content="Base content",
+            span=Span(0, 100, "test"),
+            metadata={}
+        ),
+        Feature(
+            name="derived1",
+            content="Derived 1",
+            span=Span(0, 100, "test"),
+            metadata={"required_features": ["base"]}
+        ),
+        Feature(
+            name="derived2",
+            content="Derived 2",
+            span=Span(0, 100, "test"),
+            metadata={"required_features": ["base"]}
+        ),
+        Feature(
+            name="complex",
+            content="Complex",
+            span=Span(0, 100, "test"),
+            metadata={"required_features": ["derived1", "derived2"]}
+        )
+    ]
+    
+    for feat in features:
+        feature_manager.store.save_feature(feat)
+        
+    # Get dependency graph
+    graph = feature_manager.get_feature_graph()
+    
+    assert len(graph) == 4
+    assert "base" in graph
+    assert not graph["base"]  # No dependencies
+    assert "derived1" in graph
+    assert "base" in graph["derived1"]
+    assert "complex" in graph
+    assert all(dep in graph["complex"] for dep in ["derived1", "derived2"])
