@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 from loguru import logger
 
+from .strategies import TopDownStrategy, BottomUpStrategy, HybridStrategy
 from .interfaces import (
     Strategy,
     ProcessingContext,
@@ -15,7 +16,6 @@ from .interfaces import (
     SynthesisStrategy
 )
 
-.strategies import TopDownStrategy, BottomUpStrategy, HybridStrategy
 
 class FeatureAwareProcessor:
     """
