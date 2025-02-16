@@ -3,7 +3,7 @@
 Core interfaces for document processing and synthesis.
 """
 from typing import Protocol, Dict, List, Callable, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 class Strategy(Enum):
