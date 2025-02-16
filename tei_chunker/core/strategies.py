@@ -287,50 +287,51 @@ class TopDownStrategy(SynthesisStrategy):
                 
         return processor("\n\n".join(parts))
         
+
     def _split_into_sections(self, content: str) -> List[Span]:
         """Split content into logical sections."""
-        # In practice, this would use XML structure
-        # For now, using simple heuristics
-        sections = []
-        current_pos = 0
+        lines = content.split("\n")
+        sections: List[Span] = []
+        current_section: List[str] = []
+        start_pos = 0
         
-        paragraphs = content.split("\n\n")
-        current_section = []
-        
-        for para in paragraphs:
-            if self._is_section_header(para):
-                if current_section:
-                    text = "\n\n".join(current_section)
-                    sections.append(Span(
-                        start=current_pos,
-                        end=current_pos + len(text),
-                        text=text,
-                        metadata={'type': 'section'}
-                    ))
-                    current_pos = current_pos + len(text) + 2
-                    current_section = []
-            
-            current_section.append(para)
+        for line in lines:
+            if self._is_section_header(line) and current_section:
+                # Complete current section
+                section_text = "\n".join(current_section)
+                sections.append(Span(
+                    start=start_pos,
+                    end=start_pos + len(section_text),
+                    text=section_text
+                ))
+                start_pos += len(section_text) + 1  # +1 for newline
+                current_section = []
+                
+            current_section.append(line)
             
         # Add final section
         if current_section:
-            text = "\n\n".join(current_section)
+            section_text = "\n".join(current_section)
             sections.append(Span(
-                start=current_pos,
-                end=current_pos + len(text),
-                text=text,
-                metadata={'type': 'section'}
+                start=start_pos,
+                end=start_pos + len(section_text),
+                text=section_text
             ))
             
-        return sections
+        return sections if sections else [Span(0, len(content), content)]
         
     def _is_section_header(self, text: str) -> bool:
         """Identify section headers."""
-        # Simple heuristic - could be more sophisticated
-        lines = text.strip().split("\n")
-        if len(lines) == 1 and len(lines[0].split()) <= 5:
-            return True
-        return False
+        text = text.strip()
+        if not text:
+            return False
+            
+        # Simple heuristics for headers
+        starts_with_number = any(text.startswith(str(i)) for i in range(10))
+        is_short = len(text.split()) <= 5
+        is_capitalized = text.istitle() or text.isupper()
+        
+        return (starts_with_number or is_capitalized) and is_short
         
     def _split_section(
         self,
@@ -380,6 +381,48 @@ class TopDownStrategy(SynthesisStrategy):
             relevant_features = [
                 f for f in feature_list
                 if (f.span.start < span.end and f.span.end > span.start)
+
+    def _chunk_content(
+        self,
+        content_list: List[str],
+        max_tokens: int,
+        overlap_tokens: int
+    ) -> List[str]:
+        """Split content into overlapping chunks."""
+        chunks: List[str] = []
+        current_chunk: List[str] = []
+        current_tokens = 0
+        
+        for content in content_list:
+            content_tokens = len(content.split())
+            
+            if current_tokens + content_tokens <= max_tokens:
+                current_chunk.append(content)
+                current_tokens += content_tokens
+            else:
+                # Add current chunk if it exists
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                    
+                # Start new chunk with overlap
+                if overlap_tokens > 0 and current_chunk:
+                    # Keep some overlap from previous chunk
+                    words = " ".join(current_chunk).split()
+                    overlap_words = words[-overlap_tokens:]
+                    current_chunk = [" ".join(overlap_words)]
+                    current_tokens = len(overlap_words)
+                else:
+                    current_chunk = []
+                    current_tokens = 0
+                    
+                current_chunk.append(content)
+                current_tokens += content_tokens
+                
+        # Add final chunk
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+            
+        return chunks
             ]
             if relevant_features:
                 relevant[name] = relevant_features
