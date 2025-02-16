@@ -27,7 +27,8 @@ class SynthesisNode:
         
         # Get features from this node
         if features := self.metadata.get('features', {}).get(feature_type, []):
-            content.extend(f['content'] for f in features)
+            # Features are Node objects, access content directly
+            content.extend(f.content for f in features)
             
         # Get features from children
         for child in self.children:
@@ -41,7 +42,7 @@ class SynthesisNode:
         
         for overlap in self.overlapping:
             if features := overlap.metadata.get('features', {}).get(feature_type, []):
-                content.extend(f['content'] for f in features)
+                content.extend(f.content for f in features)
                 
         return content
 
