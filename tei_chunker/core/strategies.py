@@ -16,20 +16,26 @@ from .interfaces import (
 
 class BottomUpStrategy(SynthesisStrategy):
     """Build synthesis incrementally from leaves up."""
-    
     def synthesize(
         self,
         content: str,
         features: Dict[str, List[Feature]],
         processor: ContentProcessor,
-        context: ProcessingContext
+        context: ProcessingContext,
+        depth: int = 0  # Add depth parameter
     ) -> str:
+        # Prevent infinite recursion
+        if depth > 10:  # reasonable limit
+            raise ValueError("Maximum recursion depth exceeded")
+            
+        # Split into sections
         spans = self._split_hierarchical(content, context.max_tokens)
         return self._process_spans_bottom_up(
-            spans,
-            features,
-            processor,
-            context
+            spans, 
+            features, 
+            processor, 
+            context,
+            depth + 1
         )
         
     def _split_hierarchical(
@@ -61,7 +67,8 @@ class BottomUpStrategy(SynthesisStrategy):
         spans: List[Span],
         features: Dict[str, List[Feature]],
         processor: ContentProcessor,
-        context: ProcessingContext
+        context: ProcessingContext,
+        depth: int
     ) -> str:
         processed_spans = []
         
@@ -70,24 +77,51 @@ class BottomUpStrategy(SynthesisStrategy):
             span_features = self._get_relevant_features(span, features)
             
             # Process span with its features
-            result = processor(
-                self._format_for_processing(span, span_features)
-            )
-            
+            content = span.text
+            if len(content.split()) <= context.max_tokens:
+                result = processor(self._format_for_processing(span, span_features))
+            else:
+                # Split if too large
+                sub_spans = self._split_section(span, context.max_tokens, context.overlap_tokens)
+                sub_results = []
+                for sub in sub_spans:
+                    sub_features = self._get_relevant_features(sub, features)
+                    sub_result = processor(self._format_for_processing(sub, sub_features))
+                    sub_results.append(sub_result)
+                result = "\n\n".join(sub_results)
+                
             processed_spans.append(result)
             
         # Combine processed spans
-        if len(processed_spans) == 1:
-            return processed_spans[0]
-            
-        # Recursively combine if needed
-        return self.synthesize(
-            "\n\n".join(processed_spans),
-            features,
-            processor,
-            context
-        )
+        return "\n\n".join(processed_spans)
+    
+    def _split_section(
+        self,
+        section: Span,
+        max_tokens: int,
+        overlap_tokens: int
+    ) -> List[Span]:
+        """Split a section into smaller spans."""
+        words = section.text.split()
+        spans: List[Span] = []
         
+        start_idx = 0
+        while start_idx < len(words):
+            end_idx = min(start_idx + max_tokens, len(words))
+            chunk_text = " ".join(words[start_idx:end_idx])
+            
+            spans.append(Span(
+                start=section.start + start_idx,
+                end=section.start + end_idx,
+                text=chunk_text
+            ))
+            
+            start_idx = end_idx - overlap_tokens
+            if start_idx < 0:
+                start_idx = 0
+                
+        return spans
+
     def _format_for_processing(
         self,
         span: Span,
