@@ -3,8 +3,10 @@
 Base classes for document synthesis.
 """
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any, Callable, Set
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import List, Dict, Optional, Any, Callable, Set
+
 from loguru import logger
 
 from ..graph import DocumentGraph, Node, Feature
@@ -167,7 +169,7 @@ class Synthesizer:
                         n.node_id for n in node.children + node.overlapping
                     ],
                     'feature_version': version,
-                    'synthesized_at': datetime.utcnow().isoformat()
+                    'synthesized_at': datetime.now(timezone.utc).isoformat()
                 }
             )
             
