@@ -131,6 +131,8 @@ class HybridStrategy(SynthesisStrategy):
                 context
             )
             
+# tei_chunker/core/strategies.py
+
 class TopDownStrategy(SynthesisStrategy):
     """Try to process maximum content at once."""
     
@@ -139,13 +141,22 @@ class TopDownStrategy(SynthesisStrategy):
         content: str,
         features: Dict[str, List[Feature]],
         processor: ContentProcessor,
-        context: ProcessingContext
+        context: ProcessingContext,
+        depth: int = 0  # Add depth parameter
     ) -> str:
+        # Add recursion limit
+        if depth > 10:  # reasonable limit
+            raise ValueError("Maximum recursion depth exceeded")
+            
         if self._can_fit_in_context(content, features, context):
-            return self._process_all_at_once(
-                content,
-                features,
-                processor
+            return self._process_all_at_once(content, features, processor)
+            
+        # Check minimum chunk size
+        if len(content.split()) <= context.min_chunk_tokens:
+            raise ValueError(
+                f"Content size ({len(content.split())} tokens) "
+                f"exceeds context window ({context.max_tokens} tokens) "
+                "and cannot be subdivided further"
             )
             
         sections = self._split_into_sections(content)
@@ -154,22 +165,20 @@ class TopDownStrategy(SynthesisStrategy):
         for section in sections:
             section_features = self._get_relevant_features(section, features)
             try:
+                # Pass incremented depth
                 result = self.synthesize(
                     section.text,
                     section_features,
                     processor,
-                    context
+                    context,
+                    depth + 1
                 )
                 results.append(result)
             except ValueError as e:
-                if len(section.text.split()) <= context.min_chunk_tokens:
-                    raise ValueError(
-                        f"Section of size {len(section.text.split())} tokens "
-                        f"exceeds context window ({context.max_tokens} tokens) "
-                        "and cannot be subdivided further"
-                    ) from e
-                    
-                # Split section and process parts
+                # If we hit minimum chunk size, propagate error
+                if "cannot be subdivided further" in str(e):
+                    raise
+                # Otherwise try to split section
                 subsections = self._split_section(
                     section,
                     context.max_tokens,
@@ -181,25 +190,24 @@ class TopDownStrategy(SynthesisStrategy):
                         sub.text,
                         sub_features,
                         processor,
-                        context
+                        context,
+                        depth + 1
                     )
                     results.append(sub_result)
                     
-        # Final combination of results
-        if len(results) == 1:
-            return results[0]
-            
+        # Final combination
         combined = "\n\n".join(results)
         if self._can_fit_in_context(combined, {}, context):
             return processor(combined)
             
-        # Need to process combination in chunks
-        return self.synthesize(
-            combined,
-            {},  # No features for final combination
-            processor,
-            context
+        # Split final combination if needed
+        chunks = self._chunk_content(
+            [combined],
+            context.max_tokens,
+            context.overlap_tokens
         )
+        chunk_results = [processor(chunk) for chunk in chunks]
+        return "\n\n".join(chunk_results)
         
     def _can_fit_in_context(
         self,
