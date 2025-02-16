@@ -3,13 +3,13 @@
 Base classes for document synthesis.
 """
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import List, Dict, Optional, Any, Callable, Set
-
+from pathlib import Path
+from datetime import datetime, timezone
 from loguru import logger
 
-from ..graph import DocumentGraph, Node, Feature
+from ..core.interfaces import Feature, Span
+from ..graph import DocumentGraph, Node
 
 @dataclass
 class SynthesisNode:
@@ -25,10 +25,17 @@ class SynthesisNode:
         """Get all content of a specific feature type in this subtree."""
         content = []
         
-        # Get features from this node
-        if features := self.metadata.get('features', {}).get(feature_type, []):
-            # Features are Node objects, access content directly
-            content.extend(f.content for f in features)
+        # Get features from this node's metadata
+        features = self.metadata.get('features', {}).get(feature_type, [])
+        if features:
+            # Handle both Node and Feature objects
+            for feat in features:
+                if isinstance(feat, (Node, Feature)):
+                    content.append(feat.content)
+                elif isinstance(feat, dict):
+                    content.append(feat['content'])
+                else:
+                    logger.warning(f"Unknown feature type: {type(feat)}")
             
         # Get features from children
         for child in self.children:
@@ -42,7 +49,7 @@ class SynthesisNode:
         
         for overlap in self.overlapping:
             if features := overlap.metadata.get('features', {}).get(feature_type, []):
-                content.extend(f.content for f in features)
+                content.extend(feat.content for feat in features)
                 
         return content
 
