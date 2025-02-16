@@ -181,11 +181,11 @@ class HierarchicalChunker:
             sections.append(section)
 
         return sections
-
+    
     def chunk_document(self, sections: List[Section]) -> List[str]:
         """
         Create chunks while respecting section boundaries.
-
+        
         Args:
             sections: List of document sections
         Returns:
@@ -193,29 +193,26 @@ class HierarchicalChunker:
         """
         if not sections:
             return []
-
-        chunks = []
-        current_chunk = []
+    
+        chunks: List[str] = []
+        current_chunk: List[str] = []
         current_size = 0
-
-        def process_section(section: Section):
+    
+        def process_section(section: Section) -> None:
             """Process a single section and its subsections."""
             nonlocal current_chunk, current_size, chunks
-
+            
             section_content = section.full_content
             section_size = len(section_content)
-
-            # If current section is too large to fit in a single chunk
+    
             if section_size > self.max_chunk_size:
-                # First, add any existing content as a chunk
                 if current_chunk:
                     chunks.append("\n\n".join(current_chunk))
                     current_chunk = []
                     current_size = 0
-
-                # Split section content into chunks
+    
                 words = section_content.split()
-                current_words = []
+                current_words: List[str] = []
                 current_word_size = 0
 
                 for word in words:
