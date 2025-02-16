@@ -23,21 +23,13 @@ class SynthesisNode:
     
     def get_feature_content(self, feature_type: str) -> List[str]:
         """Get all content of a specific feature type in this subtree."""
-        content = []
+        content: List[str] = []
         
         # Get features from this node's metadata
         features = self.metadata.get('features', {}).get(feature_type, [])
         if features:
-            # Handle both Node and Feature objects
-            for feat in features:
-                if isinstance(feat, (Node, Feature)):
-                    content.append(feat.content)
-                elif isinstance(feat, dict):
-                    content.append(feat['content'])
-                else:
-                    logger.warning(f"Unknown feature type: {type(feat)}")
+            content.extend(feat.content for feat in features)
             
-        # Get features from children
         for child in self.children:
             content.extend(child.get_feature_content(feature_type))
             
