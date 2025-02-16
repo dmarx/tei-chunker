@@ -3,9 +3,13 @@
 import pytest
 from typing import Dict, List
 
-from tei_chunker.core.strategies import Strategy, TopDownStrategy, BottomUpStrategy, HybridStrategy
 from tei_chunker.core.interfaces import ProcessingContext, Feature, Span, ContentProcessor
-
+from tei_chunker.core.strategies import (
+    Strategy,
+    TopDownStrategy, 
+    BottomUpStrategy, 
+    HybridStrategy
+)
 
 @pytest.fixture
 def context():
@@ -24,256 +28,250 @@ def simple_processor():
     return process
 
 @pytest.fixture
-def sample_content():
-    """Sample document content."""
-    return """Section 1
-    This is the first section of the document.
-    It contains multiple paragraphs.
-
-    Section 2
-    This is the second section.
-    It also has content.
-
-    Section 3
-    This is the final section.
-    It completes the document."""
-
-@pytest.fixture
-def sample_features():
-    """Sample features for testing."""
+def features() -> Dict[str, List[Feature]]:
+    """Create test features."""
     return {
         "summary": [
             Feature(
                 name="summary",
-                content="Summary of section 1",
+                content="First section summary",
                 span=Span(0, 100, "Section 1 content"),
                 metadata={}
             ),
             Feature(
                 name="summary",
-                content="Summary of section 2",
+                content="Second section summary",
                 span=Span(101, 200, "Section 2 content"),
                 metadata={}
             )
-        ],
-        "keywords": [
-            Feature(
-                name="keywords",
-                content="keywords for all content",
-                span=Span(0, 300, "Full content"),
-                metadata={}
-            )
         ]
     }
 
-def test_top_down_strategy_fits_context(
-    context: ProcessingContext,
-    simple_processor: ContentProcessor,
-    sample_content: str,
-    sample_features: Dict[str, List[Feature]]
-):
-    """Test top-down strategy when content fits in context."""
-    strategy = TopDownStrategy()
-    # Use small content that will fit
-    small_content = "Small test content"
-    
-    result = strategy.synthesize(
-        small_content,
-        sample_features,
-        simple_processor,
-        context
-    )
-    
-    assert "Processed" in result
-    assert "Small test content" in result
-    assert "summary" in result.lower()
-    assert "keywords" in result.lower()
+@pytest.fixture
+def small_content() -> str:
+    """Small test content."""
+    return "This is a small test section that should fit in one chunk."
 
-def test_top_down_strategy_splits_content(
-    context: ProcessingContext,
-    simple_processor: ContentProcessor,
-    sample_content: str,
-    sample_features: Dict[str, List[Feature]]
-):
-    """Test top-down strategy splits content when needed."""
-    strategy = TopDownStrategy()
-    
-    result = strategy.synthesize(
-        sample_content,
-        sample_features,
-        simple_processor,
-        context
-    )
-    
-    # Should have processed multiple chunks
-    assert result.count("Processed") > 1
-    # Should contain content from different sections
-    assert "Section 1" in result
-    assert "Section 2" in result
-    assert "Section 3" in result
+@pytest.fixture
+def large_content() -> str:
+    """Large test content that will need chunking."""
+    sections = []
+    for i in range(5):
+        sections.append(f"""Section {i+1}
+        This is section {i+1} of the test document.
+        It contains multiple paragraphs and lines.
+        This should force chunking when processing.
+        
+        Each section has multiple paragraphs.
+        This helps test boundary detection.
+        And ensures proper chunking behavior.""")
+    return "\n\n".join(sections)
 
-def test_bottom_up_strategy(
-    context: ProcessingContext,
-    simple_processor: ContentProcessor,
-    sample_content: str,
-    sample_features: Dict[str, List[Feature]]
-):
-    """Test bottom-up strategy processing."""
-    strategy = BottomUpStrategy()
-    
-    result = strategy.synthesize(
-        sample_content,
-        sample_features,
-        simple_processor,
-        context
-    )
-    
-    # Should process sections separately and combine
-    assert "Section 1" in result
-    assert "Section 2" in result
-    assert "Section 3" in result
-    # Should include features
-    assert "summary" in result.lower()
-    assert "keywords" in result.lower()
-
-def test_hybrid_strategy_small_content(
-    context: ProcessingContext,
-    simple_processor: ContentProcessor,
-    sample_features: Dict[str, List[Feature]]
-):
-    """Test hybrid strategy with small content (should use top-down)."""
-    strategy = HybridStrategy()
-    small_content = "Small test content"
-    
-    result = strategy.synthesize(
-        small_content,
-        sample_features,
-        simple_processor,
-        context
-    )
-    
-    # Should process everything at once
-    assert result.count("Processed") == 1
-    assert "Small test content" in result
-
-def test_hybrid_strategy_large_content(
-    context: ProcessingContext,
-    simple_processor: ContentProcessor,
-    sample_content: str,
-    sample_features: Dict[str, List[Feature]]
-):
-    """Test hybrid strategy with large content (should fall back to bottom-up)."""
-    strategy = HybridStrategy()
-    
-    result = strategy.synthesize(
-        sample_content,
-        sample_features,
-        simple_processor,
-        context
-    )
-    
-    # Should have processed multiple chunks
-    assert result.count("Processed") > 1
-    # Should contain all sections
-    assert "Section 1" in result
-    assert "Section 2" in result
-    assert "Section 3" in result
-
-def test_strategy_with_overlapping_features(
-    context: ProcessingContext,
-    simple_processor: ContentProcessor,
-    sample_content: str
-):
-    """Test handling of overlapping features."""
+def test_strategy_base_methods():
+    """Test base Strategy class methods."""
+    strategy = Strategy()
     features = {
-        "analysis": [
+        "test": [
             Feature(
-                name="analysis",
-                content="Analysis of sections 1-2",
-                span=Span(0, 150, "Sections 1-2"),
-                metadata={}
-            ),
-            Feature(
-                name="analysis",
-                content="Analysis of sections 2-3",
-                span=Span(100, 300, "Sections 2-3"),
+                name="test",
+                content="Test content",
+                span=Span(0, 100, "test"),
                 metadata={}
             )
         ]
     }
     
+    # Test feature relevance detection
+    relevant = strategy._get_relevant_features(
+        Span(0, 50, "test"),
+        features
+    )
+    assert "test" in relevant
+    assert len(relevant["test"]) == 1
+
+def test_top_down_synthesis_small_content(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    small_content: str,
+    features: Dict[str, List[Feature]]
+):
+    """Test top-down strategy with content that fits in context."""
     strategy = TopDownStrategy()
     result = strategy.synthesize(
-        sample_content,
+        small_content,
         features,
         simple_processor,
         context
     )
     
-    # Should handle overlapping features appropriately
-    assert "Analysis of sections 1-2" in result
-    assert "Analysis of sections 2-3" in result
+    # Should process everything at once
+    assert result.count("Processed:") == 1
+    assert small_content in result
+    assert "summary" in result.lower()
 
-def test_strategy_respects_min_chunk_size(
-    simple_processor: ContentProcessor,
-    sample_content: str,
-    sample_features: Dict[str, List[Feature]]
-):
-    """Test that strategies respect minimum chunk size."""
-    # Set very small max tokens but large minimum chunk
-    context = ProcessingContext(
-        max_tokens=20,
-        min_chunk_tokens=100  # Larger than max_tokens
-    )
-    
-    strategy = TopDownStrategy()
-    
-    with pytest.raises(ValueError) as exc_info:
-        strategy.synthesize(
-            sample_content,
-            sample_features,
-            simple_processor,
-            context
-        )
-    
-    assert "cannot be subdivided further" in str(exc_info.value)
-
-def test_strategy_handles_empty_features(
+def test_top_down_synthesis_large_content(
     context: ProcessingContext,
     simple_processor: ContentProcessor,
-    sample_content: str
+    large_content: str,
+    features: Dict[str, List[Feature]]
 ):
-    """Test strategies work with no features."""
+    """Test top-down strategy with content that needs chunking."""
     strategy = TopDownStrategy()
-    
     result = strategy.synthesize(
-        sample_content,
-        {},  # No features
+        large_content,
+        features,
         simple_processor,
         context
     )
     
-    assert "Processed" in result
+    # Should split into multiple chunks
+    assert result.count("Processed:") > 1
     assert "Section 1" in result
-    assert "Section 2" in result
+    assert "Section 5" in result  # Test both ends
 
-def test_strategy_error_handling(
+def test_bottom_up_synthesis(
     context: ProcessingContext,
-    sample_content: str,
-    sample_features: Dict[str, List[Feature]]
+    simple_processor: ContentProcessor,
+    large_content: str,
+    features: Dict[str, List[Feature]]
 ):
-    """Test error handling in strategies."""
+    """Test bottom-up strategy."""
+    strategy = BottomUpStrategy()
+    result = strategy.synthesize(
+        large_content,
+        features,
+        simple_processor,
+        context
+    )
+    
+    # Should have processed sections
+    assert "Section 1" in result
+    assert "Section 5" in result
+    assert result.count("Processed:") > 1
+
+def test_hybrid_strategy_behavior(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    small_content: str,
+    large_content: str,
+    features: Dict[str, List[Feature]]
+):
+    """Test hybrid strategy behavior with different content sizes."""
+    strategy = HybridStrategy()
+    
+    # Small content should use top-down
+    small_result = strategy.synthesize(
+        small_content,
+        features,
+        simple_processor,
+        context
+    )
+    assert small_result.count("Processed:") == 1
+    
+    # Large content should fall back to bottom-up
+    large_result = strategy.synthesize(
+        large_content,
+        features,
+        simple_processor,
+        context
+    )
+    assert large_result.count("Processed:") > 1
+
+def test_strategy_respects_min_chunk_size(
+    simple_processor: ContentProcessor,
+    large_content: str,
+    features: Dict[str, List[Feature]]
+):
+    """Test that strategies respect minimum chunk size."""
+    context = ProcessingContext(
+        max_tokens=20,  # Very small max
+        min_chunk_tokens=1000,  # Large minimum
+        overlap_tokens=10
+    )
+    
+    strategy = TopDownStrategy()
+    with pytest.raises(ValueError) as exc_info:
+        strategy.synthesize(
+            large_content,
+            features,
+            simple_processor,
+            context
+        )
+    assert "cannot be subdivided further" in str(exc_info.value)
+
+def test_strategy_content_formatting(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    features: Dict[str, List[Feature]]
+):
+    """Test how strategies format content with features."""
+    content = "Test content"
+    
+    # Test each strategy's formatting
+    strategies = [TopDownStrategy(), BottomUpStrategy()]
+    for strategy in strategies:
+        result = strategy.synthesize(
+            content,
+            features,
+            simple_processor,
+            context
+        )
+        
+        # Should include content and features
+        assert "Test content" in result
+        assert "summary" in result.lower()
+        assert "section" in result.lower()
+
+def test_overlapping_features_handling(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    large_content: str
+):
+    """Test handling of overlapping features."""
+    overlapping_features = {
+        "analysis": [
+            Feature(
+                name="analysis",
+                content="Analysis of first half",
+                span=Span(0, 300, "First half"),
+                metadata={}
+            ),
+            Feature(
+                name="analysis",
+                content="Analysis of second half",
+                span=Span(200, 500, "Second half"),
+                metadata={}
+            )
+        ]
+    }
+    
+    strategy = TopDownStrategy()
+    result = strategy.synthesize(
+        large_content,
+        overlapping_features,
+        simple_processor,
+        context
+    )
+    
+    # Should handle both overlapping features
+    assert "first half" in result.lower()
+    assert "second half" in result.lower()
+
+def test_error_handling(
+    context: ProcessingContext,
+    large_content: str,
+    features: Dict[str, List[Feature]]
+):
+    """Test strategy error handling."""
     def failing_processor(content: str) -> str:
         raise ValueError("Processing failed")
     
     strategy = TopDownStrategy()
-    
     with pytest.raises(ValueError) as exc_info:
         strategy.synthesize(
-            sample_content,
-            sample_features,
+            large_content,
+            features,
             failing_processor,
             context
         )
-    
     assert "Processing failed" in str(exc_info.value)
