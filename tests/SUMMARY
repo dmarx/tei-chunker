@@ -1,0 +1,1207 @@
+---
+File: tests/conftest.py
+---
+# tests/conftest.py
+"""
+Shared test fixtures.
+"""
+import pytest
+from pathlib import Path
+
+
+@pytest.fixture
+def test_data_dir(tmp_path):
+    """Create a test data directory structure."""
+    data_dir = tmp_path / "papers"
+    data_dir.mkdir()
+    return data_dir
+
+@pytest.fixture
+def sample_xml_content():
+    """Create sample XML content for testing."""
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+    <teiHeader>
+        <fileDesc>
+            <titleStmt>
+                <title>Test Paper</title>
+            </titleStmt>
+        </fileDesc>
+    </teiHeader>
+    <text>
+        <body>
+            <div>
+                <head>Introduction</head>
+                <p>Test introduction content.</p>
+                <formula>E = mc^2</formula>
+            </div>
+            <div>
+                <head>Methods</head>
+                <p>Test methods content.</p>
+            </div>
+        </body>
+    </text>
+</TEI>"""
+
+
+
+---
+File: tests/test_chunking.py
+---
+"""
+Tests for hierarchical document chunking.
+"""
+
+import pytest
+from tei_chunker.chunking import HierarchicalChunker, Section
+
+
+@pytest.fixture
+def sample_xml():
+    """Create a sample XML document."""
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+    <teiHeader>
+        <fileDesc>
+            <titleStmt>
+                <title level="a" type="main">Test Paper</title>
+            </titleStmt>
+        </fileDesc>
+    </teiHeader>
+    <text>
+        <body>
+            <div xmlns="http://www.tei-c.org/ns/1.0">
+                <head>Introduction</head>
+                <p>This is an introduction paragraph.</p>
+                <p>This is another paragraph.</p>
+                <div xmlns="http://www.tei-c.org/ns/1.0">
+                    <head>Background</head>
+                    <p>Some background information.</p>
+                    <formula>E = mc^2</formula>
+                </div>
+            </div>
+            <div xmlns="http://www.tei-c.org/ns/1.0">
+                <head>Methods</head>
+                <p>Our methodology is described here.</p>
+                <div xmlns="http://www.tei-c.org/ns/1.0">
+                    <head>Data Collection</head>
+                    <p>We collected data as follows.</p>
+                </div>
+                <div xmlns="http://www.tei-c.org/ns/1.0">
+                    <head>Analysis</head>
+                    <p>Analysis was performed using...</p>
+                </div>
+            </div>
+        </body>
+    </text>
+</TEI>"""
+
+
+@pytest.fixture
+def chunker():
+    """Create a chunker instance."""
+    return HierarchicalChunker(max_chunk_size=500, overlap_size=50)
+
+
+def test_section_creation():
+    """Test basic section object creation."""
+    section = Section(title="Test", content="Content", level=1, subsections=[])
+    assert section.title == "Test"
+    assert section.content == "Content"
+    assert section.level == 1
+    assert len(section.subsections) == 0
+
+
+def test_section_hierarchy():
+    """Test section hierarchy handling."""
+    subsection = Section(
+        title="Subsection", content="Sub content", level=2, subsections=[]
+    )
+    section = Section(
+        title="Main", content="Main content", level=1, subsections=[subsection]
+    )
+    subsection.parent = section
+
+    assert section.subsections[0] == subsection
+    assert subsection.parent == section
+    assert "Main" in section.full_content
+    assert "Sub content" in section.full_content
+
+
+def test_parse_xml(chunker, sample_xml):
+    """Test XML parsing into sections."""
+    sections = chunker.parse_grobid_xml(sample_xml)
+
+    # Check top-level sections
+    assert len(sections) >= 2  # Introduction and Methods
+
+    # Check Introduction section
+    intro = next((s for s in sections if s.title == "Introduction"), None)
+    assert intro is not None
+    assert "introduction paragraph" in intro.content
+
+
+def test_formula_handling(chunker, sample_xml):
+    """Test handling of mathematical formulas."""
+    sections = chunker.parse_grobid_xml(sample_xml)
+    # Find the Background section which contains the formula
+    intro = next((s for s in sections if s.title == "Introduction"), None)
+    assert intro is not None
+    assert len(intro.subsections) > 0
+    background = intro.subsections[0]
+    assert "E = mc^2" in background.content
+
+
+def test_chunking_small_document(chunker):
+    """Test chunking of a document smaller than chunk size."""
+    sections = [
+        Section(
+            title="Small Section",
+            content="This is a small section.",
+            level=1,
+            subsections=[],
+        )
+    ]
+    chunks = chunker.chunk_document(sections)
+    assert len(chunks) >= 1
+    assert "Small Section" in chunks[0]
+
+
+def test_chunking_large_section(chunker):
+    """Test chunking of a section larger than chunk size."""
+    chunker.max_chunk_size = 100  # Set a very small chunk size
+    large_content = "word " * 200  # ~1000 characters
+    sections = [
+        Section(title="Large Section", content=large_content, level=1, subsections=[])
+    ]
+    chunks = chunker.chunk_document(sections)
+    assert len(chunks) > 1
+    assert any("Large Section" in chunk for chunk in chunks)
+
+
+def test_chunking_with_subsections(chunker):
+    """Test chunking with hierarchical sections."""
+    sections = [
+        Section(
+            title="Main",
+            content="Main content",
+            level=1,
+            subsections=[
+                Section(title="Sub A", content="A content", level=2, subsections=[]),
+                Section(title="Sub B", content="B content", level=2, subsections=[]),
+            ],
+        )
+    ]
+    chunks = chunker.chunk_document(sections)
+    assert any("Main content" in chunk for chunk in chunks)
+    assert any("Sub A" in chunk for chunk in chunks)
+    assert any("Sub B" in chunk for chunk in chunks)
+
+
+def test_invalid_xml(chunker):
+    """Test handling of invalid XML."""
+    invalid_xml = "<invalid>xml"
+    sections = chunker.parse_grobid_xml(invalid_xml)
+    assert len(sections) == 0
+
+
+def test_empty_sections(chunker):
+    """Test handling of empty sections."""
+    empty_sections = []
+    chunks = chunker.chunk_document(empty_sections)
+    assert len(chunks) == 0
+
+
+
+---
+File: tests/test_feature_manager.py
+---
+# tests/test_feature_manager.py
+"""Tests for feature management functionality."""
+import pytest
+from pathlib import Path
+from typing import Any
+from datetime import datetime
+
+from tei_chunker.core.interfaces import Strategy, Feature, Span
+from tei_chunker.features.manager import (
+    FeatureManager,
+    FeatureStore,
+    FeatureRequest
+)
+
+class MockLLMClient:
+    """Mock LLM client for testing."""
+    def complete(self, prompt: str) -> str:
+        return f"LLM response for: {prompt}"
+
+@pytest.fixture
+def tmp_feature_dir(tmp_path):
+    """Create temporary feature directory."""
+    feature_dir = tmp_path / "features"
+    feature_dir.mkdir()
+    return feature_dir
+
+@pytest.fixture
+def feature_store(tmp_feature_dir):
+    """Create feature store with some test data."""
+    store = FeatureStore(tmp_feature_dir)
+    
+    # Add some test features
+    summary_feature = Feature(
+        name="summary",
+        content="Test summary",
+        span=Span(0, 100, "Test content"),
+        metadata={"created_at": datetime.utcnow().isoformat()}
+    )
+    store.save_feature(summary_feature)
+    
+    return store
+
+@pytest.fixture
+def feature_manager(tmp_feature_dir):
+    """Create feature manager with mock LLM client."""
+    return FeatureManager(
+        tmp_feature_dir,
+        xml_processor=None
+    )
+
+@pytest.fixture
+def sample_request():
+    """Create sample feature request."""
+    return FeatureRequest(
+        name="analysis",
+        prompt_template="Analyze: {content}",
+        strategy=Strategy.TOP_DOWN_MAXIMAL,
+        required_features=["summary"]
+    )
+
+def test_feature_store_save_load(tmp_feature_dir):
+    """Test saving and loading features."""
+    store = FeatureStore(tmp_feature_dir)
+    
+    feature = Feature(
+        name="test",
+        content="Test content",
+        span=Span(0, 100, "Test content"),
+        metadata={"test_meta": "value"}
+    )
+    
+    # Save feature
+    store.save_feature(feature)
+    
+    # Create new store instance and check feature loads
+    new_store = FeatureStore(tmp_feature_dir)
+    loaded_features = new_store.get_features("test")
+    
+    assert len(loaded_features) == 1
+    assert loaded_features[0].content == "Test content"
+    assert loaded_features[0].metadata["test_meta"] == "value"
+
+def test_feature_store_get_by_span(feature_store):
+    """Test getting features filtered by span."""
+    # Add features with different spans
+    feature1 = Feature(
+        name="test",
+        content="Content 1",
+        span=Span(0, 50, "Content 1"),
+        metadata={}
+    )
+    feature2 = Feature(
+        name="test",
+        content="Content 2",
+        span=Span(40, 90, "Content 2"),
+        metadata={}
+    )
+    
+    feature_store.save_feature(feature1)
+    feature_store.save_feature(feature2)
+    
+    # Get features overlapping span
+    features = feature_store.get_features(
+        "test",
+        span=Span(30, 60, "test")
+    )
+    
+    assert len(features) == 2  # Both features overlap
+
+def test_feature_manager_process_request(
+    feature_manager,
+    sample_request
+):
+    """Test processing a feature request."""
+    content = "Test document content"
+    llm_client = MockLLMClient()
+    
+    feature = feature_manager.process_request(
+        content,
+        sample_request,
+        llm_client
+    )
+    
+    assert feature.name == "analysis"
+    assert "LLM response" in feature.content
+    assert feature.metadata["strategy"] == Strategy.TOP_DOWN_MAXIMAL.value
+    assert "created_at" in feature.metadata
+
+def test_feature_manager_validate_request(
+    feature_manager,
+    sample_request
+):
+    """Test feature request validation."""
+    # Test missing required feature
+    errors = feature_manager.validate_feature_request(sample_request)
+    assert len(errors) == 1
+    assert "summary" in errors[0]
+    
+    # Add required feature and test again
+    summary_feature = Feature(
+        name="summary",
+        content="Summary content",
+        span=Span(0, 100, "test"),
+        metadata={}
+    )
+    feature_manager.store.save_feature(summary_feature)
+    
+    errors = feature_manager.validate_feature_request(sample_request)
+    assert len(errors) == 0
+
+def test_feature_manager_circular_dependencies(feature_manager):
+    """Test detection of circular dependencies."""
+    # Create features with circular dependencies
+    feature_a = FeatureRequest(
+        name="feature_a",
+        prompt_template="Template",
+        required_features=["feature_b"]
+    )
+    
+    feature_b = FeatureRequest(
+        name="feature_b",
+        prompt_template="Template",
+        required_features=["feature_a"]
+    )
+    
+    # Add one feature first
+    feature_manager.store.save_feature(Feature(
+        name="feature_b",
+        content="Content",
+        span=Span(0, 100, "test"),
+        metadata={"required_features": ["feature_a"]}
+    ))
+    
+    # Validate should detect circular dependency
+    errors = feature_manager.validate_feature_request(feature_a)
+    assert len(errors) == 1
+    assert "Circular dependency" in errors[0]
+
+def test_feature_manager_get_feature_chain(
+    feature_manager
+):
+    """Test getting feature dependency chain."""
+    # Create features with dependencies
+    feature_manager.store.save_feature(Feature(
+        name="raw",
+        content="Raw content",
+        span=Span(0, 100, "test"),
+        metadata={}
+    ))
+    
+    feature_manager.store.save_feature(Feature(
+        name="summary",
+        content="Summary",
+        span=Span(0, 100, "test"),
+        metadata={"required_features": ["raw"]}
+    ))
+    
+    feature_manager.store.save_feature(Feature(
+        name="analysis",
+        content="Analysis",
+        span=Span(0, 100, "test"),
+        metadata={"required_features": ["summary"]}
+    ))
+    
+    # Get feature chain
+    chain = feature_manager.get_feature_chain("analysis")
+    
+    assert len(chain) == 3
+    assert "raw" in chain[0]
+    assert "summary" in chain[1]
+    assert "analysis" in chain[2]
+
+def test_feature_manager_error_handling(
+    feature_manager,
+    sample_request
+):
+    """Test error handling in feature manager."""
+    content = "Test content"
+    
+    class FailingLLMClient:
+        def complete(self, prompt: str) -> str:
+            raise ValueError("LLM processing failed")
+            
+    with pytest.raises(Exception) as exc_info:
+        feature_manager.process_request(
+            content,
+            sample_request,
+            FailingLLMClient()
+        )
+    
+    assert "LLM processing failed" in str(exc_info.value)
+
+def test_feature_persistence(feature_manager, sample_request):
+    """Test feature persistence across manager instances."""
+    content = "Test content"
+    llm_client = MockLLMClient()
+    
+    # Process feature with first manager
+    feature = feature_manager.process_request(
+        content,
+        sample_request,
+        llm_client
+    )
+    
+    # Create new manager instance
+    new_manager = FeatureManager(
+        feature_manager.store.storage_dir,
+        xml_processor=None
+    )
+    
+    # Check feature was loaded
+    features = new_manager.store.get_features(feature.name)
+    assert len(features) == 1
+    assert features[0].content == feature.content
+    
+def test_feature_graph(feature_manager):
+    """Test getting feature dependency graph."""
+    # Add features with complex dependencies
+    features = [
+        Feature(
+            name="base",
+            content="Base content",
+            span=Span(0, 100, "test"),
+            metadata={}
+        ),
+        Feature(
+            name="derived1",
+            content="Derived 1",
+            span=Span(0, 100, "test"),
+            metadata={"required_features": ["base"]}
+        ),
+        Feature(
+            name="derived2",
+            content="Derived 2",
+            span=Span(0, 100, "test"),
+            metadata={"required_features": ["base"]}
+        ),
+        Feature(
+            name="complex",
+            content="Complex",
+            span=Span(0, 100, "test"),
+            metadata={"required_features": ["derived1", "derived2"]}
+        )
+    ]
+    
+    for feat in features:
+        feature_manager.store.save_feature(feat)
+        
+    # Get dependency graph
+    graph = feature_manager.get_feature_graph()
+    
+    assert len(graph) == 4
+    assert "base" in graph
+    assert not graph["base"]  # No dependencies
+    assert "derived1" in graph
+    assert "base" in graph["derived1"]
+    assert "complex" in graph
+    assert all(dep in graph["complex"] for dep in ["derived1", "derived2"])
+
+
+
+---
+File: tests/test_processor.py
+---
+# tests/test_processor.py
+"""Tests for main feature processor."""
+import pytest
+from pathlib import Path
+from typing import List
+
+from tei_chunker.core.interfaces import Strategy
+from tei_chunker.features.processor import FeatureProcessor
+from tei_chunker.features.manager import FeatureRequest
+
+class MockLLMClient:
+    """Mock LLM client for testing."""
+    def complete(self, prompt: str) -> str:
+        return f"LLM response for: {prompt}"
+
+@pytest.fixture
+def processor(tmp_path):
+    """Create feature processor with test configuration."""
+    return FeatureProcessor(
+        data_dir=tmp_path,
+        llm_client=MockLLMClient()
+    )
+
+@pytest.fixture
+def sample_requests():
+    """Create sample feature requests with dependencies."""
+    return [
+        FeatureRequest(
+            name="summary",
+            prompt_template="Summarize: {content}",
+            strategy=Strategy.TOP_DOWN_MAXIMAL,
+            required_features=[]
+        ),
+        FeatureRequest(
+            name="analysis",
+            prompt_template="Analyze with summary: {content}",
+            strategy=Strategy.HYBRID,
+            required_features=["summary"]
+        ),
+        FeatureRequest(
+            name="final",
+            prompt_template="Final analysis: {content}",
+            strategy=Strategy.BOTTOM_UP,
+            required_features=["summary", "analysis"]
+        )
+    ]
+
+def test_process_document(processor, sample_requests):
+    """Test processing multiple feature requests for a document."""
+    content = "Test document content"
+    
+    feature_ids = processor.process_document(content, sample_requests)
+    
+    assert len(feature_ids) == 3
+    assert "summary" in feature_ids
+    assert "analysis" in feature_ids
+    assert "final" in feature_ids
+    
+    # Check features were created in correct order
+    features = processor.get_features("final")
+    assert len(features) == 1
+    assert all(dep in features[0]["metadata"]["required_features"] 
+              for dep in ["summary", "analysis"])
+
+# tests/test_processor.py
+def test_request_ordering(processor):
+    """Test requests are processed in correct dependency order."""
+    # Create and process basic request first
+    basic_request = FeatureRequest(
+        name="basic",
+        prompt_template="Template",
+        required_features=[]
+    )
+    processor.process_document("Test content", [basic_request])
+    
+    # Then create dependent requests
+    requests = [
+        FeatureRequest(
+            name="complex",
+            prompt_template="Template",
+            required_features=["basic", "intermediate"]
+        ),
+        FeatureRequest(
+            name="intermediate",
+            prompt_template="Template",
+            required_features=["basic"]
+        )
+    ]
+    
+    feature_ids = processor.process_document("Test content", requests)
+    
+    # Should process in correct order
+    assert "intermediate" in feature_ids
+    assert "complex" in feature_ids
+    assert feature_ids.index("intermediate") < feature_ids.index("complex")
+
+def test_circular_dependency_detection(processor):
+    """Test detection of circular dependencies in requests."""
+    requests = [
+        FeatureRequest(
+            name="feature_a",
+            prompt_template="Template",
+            required_features=["feature_b"]
+        ),
+        FeatureRequest(
+            name="feature_b",
+            prompt_template="Template",
+            required_features=["feature_a"]
+        )
+    ]
+    
+    with pytest.raises(ValueError) as exc_info:
+        processor.process_document("Test content", requests)
+    
+    assert "Circular dependency" in str(exc_info.value)
+
+def test_error_handling(processor, sample_requests):
+    """Test error handling during processing."""
+    # Create processor with failing LLM client
+    class FailingLLMClient:
+        def complete(self, prompt: str) -> str:
+            raise ValueError("LLM failed")
+            
+    failing_processor = FeatureProcessor(
+        data_dir=processor.data_dir,
+        llm_client=FailingLLMClient()
+    )
+    
+    # Should continue processing despite errors
+    feature_ids = failing_processor.process_document(
+        "Test content",
+        sample_requests
+    )
+    
+    assert len(feature_ids) == 0  # No features created due to errors
+
+def test_feature_retrieval(processor, sample_requests):
+    """Test retrieving processed features."""
+    content = "Test document content"
+    processor.process_document(content, sample_requests)
+    
+    # Get features
+    summaries = processor.get_features("summary")
+    analyses = processor.get_features("analysis")
+    
+    assert len(summaries) == 1
+    assert len(analyses) == 1
+    assert "LLM response" in summaries[0]["content"]
+    assert "metadata" in summaries[0]
+    assert "span" in summaries[0]
+
+def test_dependency_graph(processor, sample_requests):
+    """Test getting feature dependency graph."""
+    content = "Test document content"
+    processor.process_document(content, sample_requests)
+    
+    graph = processor.get_feature_dependencies("final")
+    
+    assert "final" in graph
+    assert "summary" in graph
+    assert "analysis" in graph
+    assert graph["final"]["summary"]  # final depends on summary
+    assert graph["final"]["analysis"]  # final depends on analysis
+    assert not graph["summary"]  # summary has no dependencies
+
+def test_processing_with_existing_features(processor):
+    """Test processing requests when some features already exist."""
+    # Process basic feature first
+    basic_request = FeatureRequest(
+        name="basic",
+        prompt_template="Basic: {content}",
+        required_features=[]
+    )
+    processor.process_document("Test content", [basic_request])
+    
+    # Now process dependent feature
+    dependent_request = FeatureRequest(
+        name="dependent",
+        prompt_template="Dependent: {content}",
+        required_features=["basic"]
+    )
+    feature_ids = processor.process_document(
+        "Test content",
+        [dependent_request]
+    )
+    
+    assert len(feature_ids) == 1
+    assert "dependent" in feature_ids
+    
+    # Check dependency was properly handled
+    features = processor.get_features("dependent")
+    assert "basic" in features[0]["metadata"]["required_features"]
+
+
+
+---
+File: tests/test_strategies.py
+---
+# tests/test_strategies.py
+"""Tests for synthesis strategies."""
+import pytest
+from typing import Dict, List
+
+from tei_chunker.core.interfaces import (
+    Strategy,
+    ProcessingContext,
+    Feature,
+    Span,
+    ContentProcessor
+)
+from tei_chunker.core.strategies import (
+    TopDownStrategy,
+    BottomUpStrategy,
+    HybridStrategy
+)
+
+@pytest.fixture
+def context():
+    """Basic processing context."""
+    return ProcessingContext(
+        max_tokens=100,
+        overlap_tokens=20,
+        min_chunk_tokens=50
+    )
+
+@pytest.fixture
+def simple_processor():
+    """Simple content processor for testing."""
+    def process(content: str) -> str:
+        return f"Processed: {content}"
+    return process
+
+@pytest.fixture
+def sample_content():
+    """Sample document content."""
+    return """Section 1
+    This is the first section of the document.
+    It contains multiple paragraphs.
+
+    Section 2
+    This is the second section.
+    It also has content.
+
+    Section 3
+    This is the final section.
+    It completes the document."""
+
+@pytest.fixture
+def sample_features():
+    """Sample features for testing."""
+    return {
+        "summary": [
+            Feature(
+                name="summary",
+                content="Summary of section 1",
+                span=Span(0, 100, "Section 1 content"),
+                metadata={}
+            ),
+            Feature(
+                name="summary",
+                content="Summary of section 2",
+                span=Span(101, 200, "Section 2 content"),
+                metadata={}
+            )
+        ],
+        "keywords": [
+            Feature(
+                name="keywords",
+                content="keywords for all content",
+                span=Span(0, 300, "Full content"),
+                metadata={}
+            )
+        ]
+    }
+
+def test_top_down_strategy_fits_context(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    sample_content: str,
+    sample_features: Dict[str, List[Feature]]
+):
+    """Test top-down strategy when content fits in context."""
+    strategy = TopDownStrategy()
+    # Use small content that will fit
+    small_content = "Small test content"
+    
+    result = strategy.synthesize(
+        small_content,
+        sample_features,
+        simple_processor,
+        context
+    )
+    
+    assert "Processed" in result
+    assert "Small test content" in result
+    assert "summary" in result.lower()
+    assert "keywords" in result.lower()
+
+def test_top_down_strategy_splits_content(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    sample_content: str,
+    sample_features: Dict[str, List[Feature]]
+):
+    """Test top-down strategy splits content when needed."""
+    strategy = TopDownStrategy()
+    
+    result = strategy.synthesize(
+        sample_content,
+        sample_features,
+        simple_processor,
+        context
+    )
+    
+    # Should have processed multiple chunks
+    assert result.count("Processed") > 1
+    # Should contain content from different sections
+    assert "Section 1" in result
+    assert "Section 2" in result
+    assert "Section 3" in result
+
+def test_bottom_up_strategy(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    sample_content: str,
+    sample_features: Dict[str, List[Feature]]
+):
+    """Test bottom-up strategy processing."""
+    strategy = BottomUpStrategy()
+    
+    result = strategy.synthesize(
+        sample_content,
+        sample_features,
+        simple_processor,
+        context
+    )
+    
+    # Should process sections separately and combine
+    assert "Section 1" in result
+    assert "Section 2" in result
+    assert "Section 3" in result
+    # Should include features
+    assert "summary" in result.lower()
+    assert "keywords" in result.lower()
+
+def test_hybrid_strategy_small_content(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    sample_features: Dict[str, List[Feature]]
+):
+    """Test hybrid strategy with small content (should use top-down)."""
+    strategy = HybridStrategy()
+    small_content = "Small test content"
+    
+    result = strategy.synthesize(
+        small_content,
+        sample_features,
+        simple_processor,
+        context
+    )
+    
+    # Should process everything at once
+    assert result.count("Processed") == 1
+    assert "Small test content" in result
+
+def test_hybrid_strategy_large_content(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    sample_content: str,
+    sample_features: Dict[str, List[Feature]]
+):
+    """Test hybrid strategy with large content (should fall back to bottom-up)."""
+    strategy = HybridStrategy()
+    
+    result = strategy.synthesize(
+        sample_content,
+        sample_features,
+        simple_processor,
+        context
+    )
+    
+    # Should have processed multiple chunks
+    assert result.count("Processed") > 1
+    # Should contain all sections
+    assert "Section 1" in result
+    assert "Section 2" in result
+    assert "Section 3" in result
+
+def test_strategy_with_overlapping_features(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    sample_content: str
+):
+    """Test handling of overlapping features."""
+    features = {
+        "analysis": [
+            Feature(
+                name="analysis",
+                content="Analysis of sections 1-2",
+                span=Span(0, 150, "Sections 1-2"),
+                metadata={}
+            ),
+            Feature(
+                name="analysis",
+                content="Analysis of sections 2-3",
+                span=Span(100, 300, "Sections 2-3"),
+                metadata={}
+            )
+        ]
+    }
+    
+    strategy = TopDownStrategy()
+    result = strategy.synthesize(
+        sample_content,
+        features,
+        simple_processor,
+        context
+    )
+    
+    # Should handle overlapping features appropriately
+    assert "Analysis of sections 1-2" in result
+    assert "Analysis of sections 2-3" in result
+
+def test_strategy_respects_min_chunk_size(
+    simple_processor: ContentProcessor,
+    sample_content: str,
+    sample_features: Dict[str, List[Feature]]
+):
+    """Test that strategies respect minimum chunk size."""
+    # Set very small max tokens but large minimum chunk
+    context = ProcessingContext(
+        max_tokens=20,
+        min_chunk_tokens=100  # Larger than max_tokens
+    )
+    
+    strategy = TopDownStrategy()
+    
+    with pytest.raises(ValueError) as exc_info:
+        strategy.synthesize(
+            sample_content,
+            sample_features,
+            simple_processor,
+            context
+        )
+    
+    assert "cannot be subdivided further" in str(exc_info.value)
+
+def test_strategy_handles_empty_features(
+    context: ProcessingContext,
+    simple_processor: ContentProcessor,
+    sample_content: str
+):
+    """Test strategies work with no features."""
+    strategy = TopDownStrategy()
+    
+    result = strategy.synthesize(
+        sample_content,
+        {},  # No features
+        simple_processor,
+        context
+    )
+    
+    assert "Processed" in result
+    assert "Section 1" in result
+    assert "Section 2" in result
+
+def test_strategy_error_handling(
+    context: ProcessingContext,
+    sample_content: str,
+    sample_features: Dict[str, List[Feature]]
+):
+    """Test error handling in strategies."""
+    def failing_processor(content: str) -> str:
+        raise ValueError("Processing failed")
+    
+    strategy = TopDownStrategy()
+    
+    with pytest.raises(ValueError) as exc_info:
+        strategy.synthesize(
+            sample_content,
+            sample_features,
+            failing_processor,
+            context
+        )
+    
+    assert "Processing failed" in str(exc_info.value)
+
+
+
+---
+File: tests/test_synthesis.py
+---
+# tests/test_synthesis.py
+"""
+Tests for document synthesis functionality.
+File: tests/test_synthesis.py
+"""
+import pytest
+from pathlib import Path
+from datetime import datetime
+
+from tei_chunker.graph import DocumentGraph, Node, Feature
+from tei_chunker.synthesis.base import Synthesizer, SynthesisNode
+from tei_chunker.synthesis.patterns import FeatureSynthesizer, SynthesisStrategy
+
+@pytest.fixture
+def sample_graph():
+    """Create a sample document graph."""
+    content = "This is a test document with multiple sections."
+    graph = DocumentGraph(content)
+    
+    # Add root section
+    root = graph.add_node(
+        content="Root section",
+        type="section",
+        span=(0, len(content))
+    )
+    
+    # Add subsections
+    section1 = graph.add_node(
+        content="Section 1",
+        type="section",
+        span=(0, 20),
+        parents=[root.id]
+    )
+    
+    section2 = graph.add_node(
+        content="Section 2",
+        type="section",
+        span=(21, len(content)),
+        parents=[root.id]
+    )
+    
+    # Add features
+    graph.add_node(
+        content="Summary of section 1",
+        type="feature:summary",
+        span=(0, 20),
+        parents=[section1.id]
+    )
+    
+    graph.add_node(
+        content="Summary of section 2",
+        type="feature:summary",
+        span=(21, len(content)),
+        parents=[section2.id]
+    )
+    
+    return graph
+
+def test_synthesis_tree_creation(sample_graph):
+    """Test creation of synthesis tree."""
+    synthesizer = Synthesizer(sample_graph)
+    root_node = sample_graph.get_nodes_by_type("section")[0]
+    
+    tree = synthesizer.get_synthesis_tree(
+        root_node,
+        feature_types=["summary"],
+        max_depth=None
+    )
+    
+    assert tree.node_id == root_node.id
+    assert len(tree.children) == 2
+    assert "summary" in tree.metadata["features"]
+
+def test_hierarchical_summary(sample_graph):
+    """Test hierarchical summary synthesis."""
+    synthesizer = FeatureSynthesizer(sample_graph)
+    root_node = sample_graph.get_nodes_by_type("section")[0]
+    
+    tree = synthesizer.get_synthesis_tree(
+        root_node,
+        feature_types=["summary"],
+        max_depth=None
+    )
+    
+    synthesizer.hierarchical_summary(tree, max_length=200)
+    
+    # Check that new feature was created
+    summaries = sample_graph.get_feature_nodes("hierarchical_summary")
+    assert len(summaries) > 0
+    assert all(s.type == "feature:hierarchical_summary" for s in summaries)
+
+def test_conflict_resolution(sample_graph):
+    """Test conflict resolution between overlapping features."""
+    synthesizer = FeatureSynthesizer(sample_graph)
+    root_node = sample_graph.get_nodes_by_type("section")[0]
+    
+    # Add overlapping feature
+    sample_graph.add_node(
+        content="Overlapping summary",
+        type="feature:summary",
+        span=(15, 25),  # Overlaps sections 1 and 2
+        parents=[root_node.id]
+    )
+    
+    tree = synthesizer.get_synthesis_tree(
+        root_node,
+        feature_types=["summary"],
+        max_depth=None
+    )
+    
+    synthesizer.resolve_conflicts(tree, "summary")
+    
+    resolved = sample_graph.get_feature_nodes("resolved_summary")
+    assert len(resolved) > 0
+    assert any("overlapping" in n.metadata for n in resolved)
+
+def test_evidence_graded_synthesis(sample_graph):
+    """Test evidence-graded synthesis."""
+    synthesizer = FeatureSynthesizer(sample_graph)
+    root_node = sample_graph.get_nodes_by_type("section")[0]
+    
+    tree = synthesizer.get_synthesis_tree(
+        root_node,
+        feature_types=["summary"],
+        max_depth=None
+    )
+    
+    synthesizer.evidence_graded_synthesis(
+        tree,
+        feature_types=["summary"],
+        confidence_threshold=0.8
+    )
+    
+    graded = sample_graph.get_feature_nodes("evidence_graded")
+    assert len(graded) > 0
+    assert all("evidence" in n.content.lower() for n in graded)
+
+def test_incremental_synthesis(sample_graph):
+    """Test incremental feature synthesis."""
+    # Add another feature type
+    section = sample_graph.get_nodes_by_type("section")[0]
+    sample_graph.add_node(
+        content="Keywords for section",
+        type="feature:keywords",
+        span=section.span,
+        parents=[section.id]
+    )
+    
+    synthesizer = FeatureSynthesizer(sample_graph)
+    tree = synthesizer.get_synthesis_tree(
+        section,
+        feature_types=["summary", "keywords"],
+        max_depth=None
+    )
+    
+    synthesizer.incremental_synthesis(
+        tree,
+        feature_sequence=["summary", "keywords"]
+    )
+    
+    incremental = sample_graph.get_feature_nodes("incremental_2")
+    assert len(incremental) > 0
+    assert all(
+        "summary" in n.content.lower() and "keywords" in n.content.lower()
+        for n in incremental
+    )
+
+def test_graph_persistence(tmp_path, sample_graph):
+    """Test saving and loading graph with syntheses."""
+    save_path = tmp_path / "test_graph.json"
+    
+    # Create some syntheses
+    synthesizer = FeatureSynthesizer(sample_graph)
+    root_node = sample_graph.get_nodes_by_type("section")[0]
+    tree = synthesizer.get_synthesis_tree(
+        root_node,
+        feature_types=["summary"],
+        max_depth=None
+    )
+    synthesizer.hierarchical_summary(tree)
+    
+    # Save graph
+    sample_graph.save(save_path)
+    
+    # Load graph
+    loaded = DocumentGraph.load(save_path)
+    
+    # Check that syntheses were preserved
+    original_features = set(n.id for n in sample_graph.get_feature_nodes("hierarchical_summary"))
+    loaded_features = set(n.id for n in loaded.get_feature_nodes("hierarchical_summary"))
+    assert original_features == loaded_features
+
+

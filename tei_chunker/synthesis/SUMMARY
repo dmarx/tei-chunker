@@ -1,0 +1,1068 @@
+---
+File: tei_chunker/synthesis/advanced.py
+---
+# tei_chunker/synthesis/advanced.py
+"""
+Advanced synthesis strategies for complex feature combinations.
+File: tei_chunker/synthesis/advanced.py
+"""
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
+from enum import Enum
+
+from .base import Synthesizer, SynthesisNode
+from .prompts import SynthesisPrompt
+
+class SynthesisMode(Enum):
+    AGGREGATE = "aggregate"  # Combine multiple features into one
+    CROSS_REFERENCE = "cross_reference"  # Cross-reference between features
+    COMPARATIVE = "comparative"  # Compare different feature perspectives
+    TEMPORAL = "temporal"  # Time-based synthesis
+    CONTEXTUAL = "contextual"  # Use broader document context
+
+@dataclass
+class FeatureDependency:
+    """Defines relationships between features."""
+    source_feature: str
+    target_feature: str
+    relationship: str  # e.g., "requires", "enhances", "contradicts"
+    priority: int = 1
+
+class AdvancedSynthesizer(Synthesizer):
+    """Advanced synthesis strategies for complex feature relationships."""
+    
+    def __init__(self, graph):
+        super().__init__(graph)
+        self.dependencies: List[FeatureDependency] = []
+        
+    def register_dependency(self, dependency: FeatureDependency) -> None:
+        """Register a feature dependency."""
+        self.dependencies.append(dependency)
+        
+    def synthesize_with_dependencies(
+        self,
+        tree: SynthesisNode,
+        target_feature: str,
+        mode: SynthesisMode
+    ) -> None:
+        """Synthesize features respecting dependencies."""
+        # Get relevant dependencies
+        deps = [d for d in self.dependencies if d.target_feature == target_feature]
+        deps.sort(key=lambda x: x.priority)
+        
+        # Process in dependency order
+        processed_features = set()
+        for dep in deps:
+            if dep.source_feature not in processed_features:
+                self._process_dependency(tree, dep, mode)
+                processed_features.add(dep.source_feature)
+                
+    def _process_dependency(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency,
+        mode: SynthesisMode
+    ) -> None:
+        """Process a single dependency."""
+        if mode == SynthesisMode.AGGREGATE:
+            self._aggregate_synthesis(tree, dependency)
+        elif mode == SynthesisMode.CROSS_REFERENCE:
+            self._cross_reference_synthesis(tree, dependency)
+        elif mode == SynthesisMode.COMPARATIVE:
+            self._comparative_synthesis(tree, dependency)
+        elif mode == SynthesisMode.TEMPORAL:
+            self._temporal_synthesis(tree, dependency)
+        elif mode == SynthesisMode.CONTEXTUAL:
+            self._contextual_synthesis(tree, dependency)
+            
+    def _aggregate_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Combine multiple features into a cohesive whole."""
+        prompt = SynthesisPrompt(
+            template="""
+            Combine these related features into a unified analysis.
+            Consider how they complement and reinforce each other.
+            
+            Source Feature ({source_type}):
+            {source_content}
+            
+            Target Feature ({target_type}):
+            {target_content}
+            
+            Relationship: {relationship}
+            
+            Synthesized Analysis:
+            """,
+            constraints=[
+                "Maintain semantic relationships",
+                "Preserve key insights from both features",
+                "Explain feature interactions"
+            ]
+        )
+        
+        def process_node(node: SynthesisNode) -> str:
+            source_content = node.get_feature_content(dependency.source_feature)
+            target_content = node.get_feature_content(dependency.target_feature)
+            
+            return prompt.format(
+                source_type=dependency.source_feature,
+                source_content="\n".join(source_content),
+                target_type=dependency.target_feature,
+                target_content="\n".join(target_content),
+                relationship=dependency.relationship
+            )
+            
+        self.synthesize(
+            tree,
+            process_node,
+            f"aggregated_{dependency.target_feature}",
+            bottom_up=True
+        )
+        
+    def _cross_reference_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Cross-reference between related features."""
+        prompt = SynthesisPrompt(
+            template="""
+            Analyze how these features reference and support each other.
+            Identify connections, confirmations, and potential contradictions.
+            
+            Primary Feature ({source_type}):
+            {source_content}
+            
+            Reference Feature ({target_type}):
+            {target_content}
+            
+            Cross-Reference Analysis:
+            1. Confirmed Points:
+            2. Complementary Information:
+            3. Potential Contradictions:
+            4. Synthesis:
+            """,
+            constraints=[
+                "Explicitly link related points",
+                "Note confirmation strength",
+                "Highlight unique contributions"
+            ]
+        )
+        
+        # Implementation similar to _aggregate_synthesis
+        
+    def _comparative_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Compare different feature perspectives."""
+        prompt = SynthesisPrompt(
+            template="""
+            Compare and contrast these feature perspectives.
+            Analyze areas of agreement, disagreement, and complementarity.
+            
+            Feature 1 ({source_type}):
+            {source_content}
+            
+            Feature 2 ({target_type}):
+            {target_content}
+            
+            Comparative Analysis:
+            1. Areas of Agreement:
+            2. Different Perspectives:
+            3. Complementary Insights:
+            4. Integrated View:
+            """,
+            constraints=[
+                "Balance perspective coverage",
+                "Explain disagreements",
+                "Justify integrated view"
+            ]
+        )
+        
+        # Implementation similar to above
+        
+    def _temporal_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Time-based synthesis of features."""
+        prompt = SynthesisPrompt(
+            template="""
+            Analyze how these features relate across time.
+            Consider evolution, changes, and temporal relationships.
+            
+            Earlier Feature ({source_type}):
+            {source_content}
+            
+            Later Feature ({target_type}):
+            {target_content}
+            
+            Temporal Analysis:
+            1. Changes Over Time:
+            2. Evolving Understanding:
+            3. Temporal Patterns:
+            4. Integrated Timeline:
+            """,
+            constraints=[
+                "Maintain chronological clarity",
+                "Track changes explicitly",
+                "Note temporal patterns"
+            ]
+        )
+        
+        # Implementation similar to above
+        
+    def _contextual_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Context-aware feature synthesis."""
+        prompt = SynthesisPrompt(
+            template="""
+            Synthesize these features considering their broader context.
+            Consider document-wide patterns and relationships.
+            
+            Local Feature ({source_type}):
+            {source_content}
+            
+            Context Feature ({target_type}):
+            {target_content}
+            
+            Document Context:
+            {context}
+            
+            Contextual Analysis:
+            1. Local Insights:
+            2. Contextual Patterns:
+            3. Broader Implications:
+            4. Integrated Understanding:
+            """,
+            constraints=[
+                "Connect local and global insights",
+                "Explain contextual relevance",
+                "Maintain coherence across scales"
+            ]
+        )
+        
+        # Implementation similar to above
+
+
+
+---
+File: tei_chunker/synthesis/base.py
+---
+# tei_chunker/synthesis/base.py
+"""
+Base classes for document synthesis.
+"""
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Any, Callable, Set
+from pathlib import Path
+from datetime import datetime, timezone
+from loguru import logger
+
+from ..core.interfaces import Feature, Span
+from ..graph import DocumentGraph, Node
+
+@dataclass
+class SynthesisNode:
+    """Node in the synthesis tree."""
+    node_id: str
+    feature_type: str
+    content: str
+    children: List['SynthesisNode']
+    overlapping: List['SynthesisNode']
+    metadata: Dict[str, Any]
+    
+    def get_feature_content(self, feature_type: str) -> List[str]:
+        """Get all content of a specific feature type in this subtree."""
+        content: List[str] = []
+        
+        # Get features from this node's metadata
+        features = self.metadata.get('features', {}).get(feature_type, [])
+        if features:
+            content.extend(feat.content for feat in features)
+            
+        for child in self.children:
+            content.extend(child.get_feature_content(feature_type))
+            
+        return content
+        
+    def get_overlapping_content(self, feature_type: str) -> List[str]:
+        """Get feature content from overlapping nodes."""
+        content = []
+        
+        for overlap in self.overlapping:
+            if features := overlap.metadata.get('features', {}).get(feature_type, []):
+                content.extend(feat.content for feat in features)
+                
+        return content
+
+class Synthesizer:
+    """
+    Base class for document synthesis operations.
+    """
+    def __init__(self, graph: DocumentGraph):
+        self.graph = graph
+        self.synthesis_cache: Dict[str, SynthesisNode] = {}
+        
+    def get_synthesis_tree(
+        self,
+        root_node: Node,
+        feature_types: List[str],
+        max_depth: Optional[int] = None,
+        visited: Optional[Set[str]] = None
+    ) -> SynthesisNode:
+        """Build synthesis tree from document graph."""
+        # Initialize visited set if not provided
+        if visited is None:
+            visited = set()
+            
+        # Check if we've already visited this node
+        if root_node.id in visited:
+            return None  # Skip to avoid cycles
+            
+        # Add node to visited set
+        visited.add(root_node.id)
+        
+        # Check cache
+        cache_key = f"{root_node.id}:{':'.join(feature_types)}:{max_depth}"
+        if cache_key in self.synthesis_cache:
+            return self.synthesis_cache[cache_key]
+            
+        # Get features for this node
+        features = {}
+        for feat_type in feature_types:
+            features[feat_type] = [
+                n for n in self.graph.get_feature_nodes(feat_type)
+                if root_node.span[0] <= n.span[0] and root_node.span[1] >= n.span[1]
+            ]
+            
+        # Process children if within depth limit
+        children = []
+        if max_depth != 0:
+            next_depth = max_depth - 1 if max_depth else None
+            for child_id in root_node.children:
+                if child := self.graph.nodes.get(child_id):
+                    if child_tree := self.get_synthesis_tree(
+                        child,
+                        feature_types,
+                        next_depth,
+                        visited.copy()  # Pass copy of visited set
+                    ):
+                        children.append(child_tree)
+                    
+        # Get overlapping nodes
+        overlapping = []
+        overlap_nodes = self.graph.get_overlapping_nodes(
+            root_node.span,
+            exclude_ids={root_node.id} | visited  # Exclude already visited nodes
+        )
+        for node in overlap_nodes:
+            if overlap_tree := self.get_synthesis_tree(
+                node,
+                feature_types,
+                max_depth=1,  # Limit overlap depth
+                visited=visited.copy()  # Pass copy of visited set
+            ):
+                overlapping.append(overlap_tree)
+            
+        # Create synthesis node
+        syn_node = SynthesisNode(
+            node_id=root_node.id,
+            feature_type=root_node.type,
+            content=root_node.content,
+            children=children,
+            overlapping=overlapping,
+            metadata={
+                'features': features,
+                'span': root_node.span,
+                'node_metadata': root_node.metadata
+            }
+        )
+        
+        self.synthesis_cache[cache_key] = syn_node
+        return syn_node
+        
+    def synthesize(
+        self,
+        tree: SynthesisNode,
+        process_fn: Callable[[SynthesisNode], str],
+        feature_name: str,
+        version: str = "1.0",
+        bottom_up: bool = True
+    ) -> None:
+        """
+        Synthesize features across a subtree.
+        
+        Args:
+            tree: Synthesis tree to process
+            process_fn: Function to generate synthesized content
+            feature_name: Name for the synthesized feature
+            version: Version string for the feature
+            bottom_up: If True, process children before parents
+        """
+        def process_node(node: SynthesisNode) -> None:
+            # Process children first if bottom-up
+            if bottom_up:
+                for child in node.children:
+                    process_node(child)
+                    
+            # Generate synthesis
+            synthesized = process_fn(node)
+            
+            # Add to graph
+            self.graph.add_node(
+                content=synthesized,
+                type=f"feature:{feature_name}",
+                span=node.metadata['span'],
+                parents=[node.node_id],
+                metadata={
+                    'synthesized_from': [
+                        n.node_id for n in node.children + node.overlapping
+                    ],
+                    'feature_version': version,
+                    'synthesized_at': datetime.now(timezone.utc).isoformat()
+                }
+            )
+            
+            # Process children last if top-down
+            if not bottom_up:
+                for child in node.children:
+                    process_node(child)
+        
+        # Process entire tree
+        process_node(tree)
+        
+    def format_for_llm(
+        self,
+        node: SynthesisNode,
+        feature_types: List[str],
+        max_depth: Optional[int] = None,
+        current_depth: int = 0,
+        include_overlapping: bool = True
+    ) -> str:
+        """Format a synthesis node's content for LLM input."""
+        if max_depth is not None and current_depth > max_depth:
+            return ""
+            
+        parts = []
+        indent = "  " * current_depth
+        
+        # Add node type and content
+        parts.append(f"{indent}[{node.feature_type}]")
+        parts.append(f"{indent}{node.content}\n")
+        
+        # Add features
+        for feat_type in feature_types:
+            if features := node.metadata['features'].get(feat_type, []):
+                parts.append(f"{indent}[{feat_type}]")
+                for feat in features:
+                    parts.append(f"{indent}{feat.content}\n")
+                    
+        # Add overlapping content if requested
+        if include_overlapping and node.overlapping:
+            parts.append(f"{indent}[overlapping content]")
+            for overlap in node.overlapping:
+                overlap_text = self.format_for_llm(
+                    overlap,
+                    feature_types,
+                    max_depth=1,
+                    current_depth=current_depth + 1
+                )
+                if overlap_text:
+                    parts.append(overlap_text)
+                    
+        # Add children
+        for child in node.children:
+            child_text = self.format_for_llm(
+                child,
+                feature_types,
+                max_depth,
+                current_depth + 1,
+                include_overlapping
+            )
+            if child_text:
+                parts.append(child_text)
+                
+        return "\n".join(parts)
+
+
+
+---
+File: tei_chunker/synthesis/patterns.py
+---
+# tei_chunker/synthesis/patterns.py
+"""
+Implementation of common synthesis patterns.
+File: tei_chunker/synthesis/patterns.py
+"""
+from typing import List, Dict, Optional, Any, Callable
+from enum import Enum
+from dataclasses import dataclass
+from datetime import datetime
+from loguru import logger
+
+from .base import Synthesizer, SynthesisNode
+from .prompts import PromptTemplates
+
+class SynthesisStrategy(Enum):
+    """Available synthesis strategies."""
+    HIERARCHICAL = "hierarchical"  # Maintain document hierarchy
+    FLAT = "flat"                 # Flatten and synthesize all at once
+    INCREMENTAL = "incremental"   # Build up synthesis gradually
+
+class FeatureSynthesizer(Synthesizer):
+    """
+    Implementation of common synthesis patterns.
+    """
+    def __init__(self, graph):
+        super().__init__(graph)
+        self.prompts = PromptTemplates()
+        
+    def hierarchical_summary(
+        self,
+        tree: SynthesisNode,
+        max_length: int = 500
+    ) -> None:
+        """
+        Create hierarchical summary synthesis.
+        
+        Args:
+            tree: Root of synthesis tree
+            max_length: Maximum length for each summary
+        """
+        prompt = self.prompts.hierarchical_summary(max_length)
+        
+        def process_node(node: SynthesisNode) -> str:
+            # Format input for LLM
+            context = self.format_for_llm(
+                node,
+                feature_types=["summary", "key_findings"]
+            )
+            
+            return prompt.format(
+                structure=self._format_structure(node),
+                features=context
+            )
+            
+        self.synthesize(
+            tree,
+            process_node,
+            feature_name="hierarchical_summary",
+            version="1.0",
+            bottom_up=True
+        )
+        
+    def resolve_conflicts(
+        self,
+        tree: SynthesisNode,
+        feature_type: str
+    ) -> None:
+        """
+        Resolve conflicts between overlapping features.
+        
+        Args:
+            tree: Root of synthesis tree
+            feature_type: Type of feature to resolve
+        """
+        prompt = self.prompts.conflict_resolution()
+        
+        def process_node(node: SynthesisNode) -> str:
+            main_content = node.get_feature_content(feature_type)
+            overlapping = node.get_overlapping_content(feature_type)
+            
+            if not overlapping:
+                return "\n".join(main_content)
+                
+            return prompt.format(
+                main_content="\n".join(main_content),
+                overlapping_content="\n".join(overlapping)
+            )
+            
+        self.synthesize(
+            tree,
+            process_node,
+            feature_name=f"resolved_{feature_type}",
+            version="1.0",
+            bottom_up=True
+        )
+        
+    def evidence_graded_synthesis(
+        self,
+        tree: SynthesisNode,
+        feature_types: List[str],
+        confidence_threshold: float = 0.8
+    ) -> None:
+        """
+        Create synthesis with evidence grading.
+        
+        Args:
+            tree: Root of synthesis tree
+            feature_types: Types of features to synthesize
+            confidence_threshold: Minimum confidence threshold
+        """
+        prompt = self.prompts.evidence_graded(confidence_threshold)
+        
+        def process_node(node: SynthesisNode) -> str:
+            findings = []
+            for feat_type in feature_types:
+                findings.extend(node.get_feature_content(feat_type))
+                findings.extend(node.get_overlapping_content(feat_type))
+                
+            return prompt.format(
+                findings="\n\n".join(findings),
+                confidence_threshold=confidence_threshold
+            )
+            
+        self.synthesize(
+            tree,
+            process_node,
+            feature_name="evidence_graded",
+            version="1.0",
+            bottom_up=True
+        )
+        
+    def incremental_synthesis(
+        self,
+        tree: SynthesisNode,
+        feature_sequence: List[str]
+    ) -> None:
+        """
+        Build up synthesis incrementally across features.
+        
+        Args:
+            tree: Root of synthesis tree
+            feature_sequence: Order of features to incorporate
+        """
+        current_synthesis = ""
+        
+        for feature_type in feature_sequence:
+            prompt = self.prompts.incremental_feature(feature_type)
+            
+            def process_node(node: SynthesisNode) -> str:
+                new_content = node.get_feature_content(feature_type)
+                return prompt.format(
+                    current_synthesis=current_synthesis,
+                    feature_type=feature_type,
+                    new_feature="\n".join(new_content)
+                )
+                
+            self.synthesize(
+                tree,
+                process_node,
+                feature_name=f"incremental_{len(feature_sequence)}",
+                version="1.0",
+                bottom_up=True
+            )
+            
+            # Update current synthesis with new feature
+            current_synthesis = self.graph.get_feature_nodes(
+                f"incremental_{len(feature_sequence)}"
+            )[0].content
+            
+    def _format_structure(self, node: SynthesisNode, depth: int = 0) -> str:
+        """Helper to format document structure."""
+        parts = [f"{'  ' * depth}{node.feature_type}: {node.content[:100]}..."]
+        for child in node.children:
+            parts.append(self._format_structure(child, depth + 1))
+        return "\n".join(parts)
+
+
+
+---
+File: tei_chunker/synthesis/prompts.py
+---
+# tei_chunker/synthesis/prompts.py
+"""
+LLM prompting templates for document synthesis.
+File: tei_chunker/synthesis/prompts.py
+"""
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Any
+
+@dataclass
+class SynthesisPrompt:
+    """Template for synthesis prompts."""
+    template: str
+    examples: Optional[List[Dict[str, str]]] = None
+    constraints: Optional[List[str]] = None
+    
+    def format(self, **kwargs) -> str:
+        """Format prompt with provided values."""
+        prompt_parts = [self.template.format(**kwargs)]
+        
+        if self.examples:
+            prompt_parts.append("\nExamples:")
+            for example in self.examples:
+                for key, value in example.items():
+                    prompt_parts.append(f"{key}:\n{value}")
+                prompt_parts.append("")
+                
+        if self.constraints:
+            prompt_parts.append("\nConstraints:")
+            for constraint in self.constraints:
+                prompt_parts.append(f"- {constraint}")
+                
+        return "\n".join(prompt_parts)
+
+class PromptTemplates:
+    """Collection of common synthesis prompt templates."""
+    
+    @staticmethod
+    def hierarchical_summary(max_length: int = 500) -> SynthesisPrompt:
+        """Template for hierarchical summary synthesis."""
+        return SynthesisPrompt(
+            template="""
+            Synthesize a coherent summary from these section summaries and their relationships.
+            Preserve key insights while resolving any conflicts.
+            
+            Section Structure:
+            {structure}
+            
+            Features to Synthesize:
+            {features}
+            
+            Synthesized Summary:
+            """,
+            constraints=[
+                f"Maximum length: {max_length} characters",
+                "Maintain narrative flow between sections",
+                "Resolve any contradictions between sections",
+                "Preserve specific numbers and key findings"
+            ]
+        )
+    
+    @staticmethod
+    def conflict_resolution() -> SynthesisPrompt:
+        """Template for resolving conflicts between features."""
+        return SynthesisPrompt(
+            template="""
+            Review these potentially conflicting analyses and synthesize a coherent view.
+            Explicitly address any contradictions or inconsistencies.
+            
+            Main Analysis:
+            {main_content}
+            
+            Overlapping Analyses:
+            {overlapping_content}
+            
+            Please:
+            1. Identify any conflicts between these analyses
+            2. Evaluate the evidence for conflicting claims
+            3. Provide a synthesized analysis that:
+               - Resolves conflicts with clear reasoning
+               - Preserves well-supported findings
+               - Acknowledges uncertainty where appropriate
+            
+            Synthesized Analysis:
+            """,
+            constraints=[
+                "Must explicitly address each conflict",
+                "Must preserve source evidence",
+                "Must indicate confidence levels"
+            ]
+        )
+    
+    @staticmethod
+    def evidence_graded(confidence_threshold: float = 0.8) -> SynthesisPrompt:
+        """Template for evidence-graded synthesis."""
+        return SynthesisPrompt(
+            template="""
+            Synthesize these findings while evaluating evidence strength.
+            
+            Findings:
+            {findings}
+            
+            For each finding, provide:
+            1. Synthesized statement
+            2. Evidence strength (Strong|Moderate|Weak)
+            3. Supporting/Conflicting evidence
+            
+            Confidence Threshold: {confidence_threshold}
+            
+            Evidence-Graded Synthesis:
+            """,
+            constraints=[
+                f"Must meet {confidence_threshold} confidence threshold",
+                "Must grade all evidence",
+                "Must explain confidence ratings"
+            ]
+        )
+    
+    @staticmethod
+    def citation_preserving() -> SynthesisPrompt:
+        """Template for citation-preserving synthesis."""
+        return SynthesisPrompt(
+            template="""
+            Synthesize these findings while preserving citation links.
+            
+            Source Material:
+            {source_material}
+            
+            Required Citation Types:
+            {citation_types}
+            
+            Guidelines:
+            1. Maintain all relevant citations
+            2. Group related findings
+            3. Indicate strength of evidence
+            
+            Synthesized Result (with citations):
+            """,
+            constraints=[
+                "Must preserve all citation links",
+                "Must indicate evidence strength",
+                "Must group related findings"
+            ]
+        )
+    
+    @staticmethod
+    def incremental_feature(feature_type: str) -> SynthesisPrompt:
+        """Template for incremental feature synthesis."""
+        return SynthesisPrompt(
+            template="""
+            Incorporate this new feature into the existing synthesis.
+            
+            Current Synthesis:
+            {current_synthesis}
+            
+            New Feature to Incorporate ({feature_type}):
+            {new_feature}
+            
+            Updated Synthesis:
+            """,
+            constraints=[
+                "Must preserve key information from current synthesis",
+                "Must integrate new feature naturally",
+                "Must maintain overall coherence"
+            ]
+        )
+
+
+
+---
+File: tei_chunker/synthesis/strategies.py
+---
+# tei_chunker/synthesis/strategies.py
+"""
+Implementation of tree synthesis strategies.
+File: tei_chunker/synthesis/strategies.py
+"""
+from enum import Enum
+from typing import List, Dict, Optional, Callable
+from dataclasses import dataclass
+from loguru import logger
+
+from .base import SynthesisNode
+
+class TreeStrategy(Enum):
+    """Available tree synthesis strategies."""
+    TOP_DOWN_MAXIMAL = "top_down_maximal"  # Try root first, subdivide if needed
+    BOTTOM_UP = "bottom_up"                # Build up from leaves
+    HYBRID = "hybrid"                      # Try top-down, fall back to bottom-up if needed
+
+@dataclass
+class SynthesisContext:
+    """Context for synthesis operations."""
+    max_tokens: int
+    feature_types: List[str]
+    overlap_tokens: int = 100
+    min_chunk_tokens: int = 500  # Don't subdivide below this size
+
+class TreeSynthesizer:
+    """
+    Implements different tree synthesis strategies.
+    """
+    def __init__(
+        self,
+        strategy: TreeStrategy,
+        context: SynthesisContext,
+        process_fn: Callable[[str], str]
+    ):
+        self.strategy = strategy
+        self.context = context
+        self.process_fn = process_fn
+        
+    def synthesize_tree(
+        self,
+        tree: SynthesisNode,
+        parent_result: Optional[str] = None
+    ) -> str:
+        """
+        Synthesize a tree using the selected strategy.
+        
+        Args:
+            tree: Root of the synthesis tree
+            parent_result: Result from parent node (for hybrid strategy)
+        Returns:
+            Synthesized content
+        """
+        if self.strategy == TreeStrategy.TOP_DOWN_MAXIMAL:
+            return self._synthesize_top_down(tree)
+        elif self.strategy == TreeStrategy.BOTTOM_UP:
+            return self._synthesize_bottom_up(tree)
+        else:  # HYBRID
+            try:
+                return self._synthesize_top_down(tree)
+            except ValueError as e:
+                logger.info(f"Falling back to bottom-up strategy: {e}")
+                return self._synthesize_bottom_up(tree)
+                
+    def _estimate_tokens(self, content: str) -> int:
+        """Rough estimate of token count."""
+        return len(content.split())
+        
+    def _can_fit_in_context(self, tree: SynthesisNode) -> bool:
+        """Check if tree content fits in context window."""
+        total_tokens = 0
+        
+        # Get all feature content
+        for feat_type in self.context.feature_types:
+            content = tree.get_feature_content(feat_type)
+            total_tokens += sum(self._estimate_tokens(c) for c in content)
+            
+        # Check overlapping content
+        for overlap in tree.overlapping:
+            for feat_type in self.context.feature_types:
+                content = overlap.get_feature_content(feat_type)
+                total_tokens += sum(self._estimate_tokens(c) for c in content)
+                
+        return total_tokens <= self.context.max_tokens
+        
+    def _synthesize_top_down(self, tree: SynthesisNode) -> str:
+        """
+        Try to synthesize entire tree at once, subdividing only if necessary.
+        """
+        # Check if we can process the entire tree
+        if self._can_fit_in_context(tree):
+            # Collect all content
+            all_content = []
+            for feat_type in self.context.feature_types:
+                content = tree.get_feature_content(feat_type)
+                if content:
+                    all_content.extend(content)
+                    
+            # Include relevant overlapping content
+            for overlap in tree.overlapping:
+                for feat_type in self.context.feature_types:
+                    content = overlap.get_feature_content(feat_type)
+                    if content:
+                        all_content.extend(content)
+                        
+            # Process everything at once
+            return self.process_fn("\n\n".join(all_content))
+            
+        # If tree is too large, check if it's subdividable
+        if not tree.children or self._estimate_tokens(tree.content) <= self.context.min_chunk_tokens:
+            raise ValueError(
+                f"Content size ({self._estimate_tokens(tree.content)} tokens) "
+                f"exceeds context window ({self.context.max_tokens} tokens) "
+                "and cannot be subdivided further"
+            )
+            
+        # Process children separately
+        child_results = []
+        for child in tree.children:
+            result = self._synthesize_top_down(child)
+            child_results.append(result)
+            
+        # Combine child results
+        combined = "\n\n".join(child_results)
+        if self._estimate_tokens(combined) <= self.context.max_tokens:
+            return self.process_fn(combined)
+        else:
+            # Need to synthesize child results in chunks
+            chunks = self._chunk_content(
+                child_results,
+                self.context.max_tokens,
+                self.context.overlap_tokens
+            )
+            chunk_results = [self.process_fn(chunk) for chunk in chunks]
+            return self.process_fn("\n\n".join(chunk_results))
+            
+    def _synthesize_bottom_up(self, tree: SynthesisNode) -> str:
+        """
+        Build synthesis from leaves up to root.
+        """
+        # Process leaves first
+        if tree.children:
+            child_results = []
+            for child in tree.children:
+                result = self._synthesize_bottom_up(child)
+                child_results.append(result)
+                
+            # Combine child results with current node
+            all_content = [tree.content] + child_results
+            
+            # Check if we need to chunk
+            if sum(self._estimate_tokens(c) for c in all_content) <= self.context.max_tokens:
+                return self.process_fn("\n\n".join(all_content))
+            else:
+                # Process in chunks
+                chunks = self._chunk_content(
+                    all_content,
+                    self.context.max_tokens,
+                    self.context.overlap_tokens
+                )
+                chunk_results = [self.process_fn(chunk) for chunk in chunks]
+                return self.process_fn("\n\n".join(chunk_results))
+        else:
+            # Leaf node - process directly
+            return self.process_fn(tree.content)
+            
+    def _chunk_content(
+        self,
+        content_list: List[str],
+        max_tokens: int,
+        overlap_tokens: int
+    ) -> List[str]:
+        """Split content into overlapping chunks."""
+        chunks = []
+        current_chunk = []
+        current_tokens = 0
+        
+        for content in content_list:
+            content_tokens = self._estimate_tokens(content)
+            
+            if current_tokens + content_tokens <= max_tokens:
+                current_chunk.append(content)
+                current_tokens += content_tokens
+            else:
+                # Add current chunk if it exists
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                    
+                # Start new chunk with overlap
+                if overlap_tokens > 0:
+                    # Find overlap content from previous chunk
+                    overlap_content = []
+                    overlap_size = 0
+                    for c in reversed(current_chunk):
+                        size = self._estimate_tokens(c)
+                        if overlap_size + size <= overlap_tokens:
+                            overlap_content.insert(0, c)
+                            overlap_size += size
+                        else:
+                            break
+                    current_chunk = overlap_content
+                else:
+                    current_chunk = []
+                    
+                current_chunk.append(content)
+                current_tokens = sum(self._estimate_tokens(c) for c in current_chunk)
+                
+        # Add final chunk
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+            
+        return chunks
+
+

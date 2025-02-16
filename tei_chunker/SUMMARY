@@ -1,0 +1,2749 @@
+---
+File: tei_chunker/__about__.py
+---
+"""Version information."""
+
+__version__ = "0.1.0"
+
+
+
+---
+File: tei_chunker/__init__.py
+---
+# tei_chunker/__init__.py
+"""
+TEI document chunking and synthesis library.
+"""
+from .__about__ import __version__
+
+from .graph import DocumentGraph, Node, Feature
+from .synthesis.base import Synthesizer, SynthesisNode
+from .synthesis.patterns import FeatureSynthesizer, SynthesisStrategy
+from .synthesis.prompts import SynthesisPrompt, PromptTemplates
+
+__all__ = [
+    "__version__",
+    "DocumentGraph",
+    "Node",
+    "Feature",
+    "Synthesizer",
+    "SynthesisNode",
+    "FeatureSynthesizer",
+    "SynthesisStrategy",
+    "SynthesisPrompt",
+    "PromptTemplates"
+]
+
+
+
+---
+File: tei_chunker/chunking.py
+---
+# tei_chunker/chunking.py
+"""
+Hierarchical document chunking based on XML structure.
+"""
+from dataclasses import dataclass
+from typing import List, Optional, Dict
+import xml.etree.ElementTree as ET
+from loguru import logger
+
+
+# Define TEI namespace
+NS = {"tei": "http://www.tei-c.org/ns/1.0"}
+
+
+@dataclass
+class Section:
+    """
+    Represents a document section with hierarchical structure.
+
+    Args:
+        title: Section title
+        content: Direct content of this section (excluding subsections)
+        level: Heading level (1 for main sections, 2+ for subsections)
+        subsections: List of child sections
+        parent: Parent section (None for top-level sections)
+    """
+
+    title: str
+    content: str
+    level: int
+    subsections: List["Section"]
+    parent: Optional["Section"] = None
+
+    @property
+    def full_content(self) -> str:
+        """Get full content including all subsections."""
+        result = [f"{'#' * self.level} {self.title}\n\n{self.content}"]
+        for subsection in self.subsections:
+            result.append(subsection.full_content)
+        return "\n\n".join(result)
+
+    @property
+    def total_length(self) -> int:
+        """Get total character length including all subsections."""
+        return len(self.full_content)
+
+    def __str__(self) -> str:
+        return f"{self.title} ({self.total_length} chars, {len(self.subsections)} subsections)"
+
+
+class HierarchicalChunker:
+    """
+    Chunks documents while respecting their hierarchical structure.
+    Args:
+        max_chunk_size: Maximum size in characters for each chunk
+        overlap_size: Number of characters to overlap between chunks
+        min_section_size: Minimum section size to keep intact
+    """
+
+    def __init__(
+        self, max_chunk_size: int, overlap_size: int = 200, min_section_size: int = 1000
+    ):
+        self.max_chunk_size = max_chunk_size
+        self.overlap_size = overlap_size
+        self.min_section_size = min_section_size
+
+    def parse_grobid_xml(self, xml_content: str) -> List[Section]:
+        """
+        Parse GROBID XML into hierarchical sections.
+
+        Args:
+            xml_content: Raw XML string from GROBID
+        Returns:
+            List of top-level sections with their subsections
+        """
+        try:
+            root = ET.fromstring(xml_content)
+            sections = []
+
+            # Process abstract if present
+            abstract = root.find(".//tei:abstract", NS)
+            if abstract is not None:
+                abstract_text = self._get_element_text(abstract)
+                if abstract_text:
+                    sections.append(
+                        Section(
+                            title="Abstract",
+                            content=abstract_text,
+                            level=1,
+                            subsections=[],
+                        )
+                    )
+
+            # Process main body
+            body = root.find(".//tei:body", NS)
+            if body is not None:
+                sections.extend(self._process_divs(body))
+
+            return sections
+
+        except ET.ParseError as e:
+            logger.error(f"Failed to parse XML: {e}")
+            return []
+
+    def _get_element_text(self, element: ET.Element) -> str:
+        """Extract all text content from an element, preserving structure."""
+        if element is None:
+            return ""
+
+        parts = []
+
+        # Handle direct text
+        if element.text and element.text.strip():
+            parts.append(element.text.strip())
+
+        # Process child elements
+        for child in element:
+            tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            # Special handling for formulas
+            if tag == "formula":
+                formula_text = child.text.strip() if child.text else ""
+                parts.append(f"$${formula_text}$$")
+            # Handle references
+            elif tag == "ref":
+                ref_text = child.text.strip() if child.text else ""
+                parts.append(f"[{ref_text}]")
+            # Regular text content
+            else:
+                child_text = self._get_element_text(child)
+                if child_text:
+                    parts.append(child_text)
+
+            # Handle tail text
+            if child.tail and child.tail.strip():
+                parts.append(child.tail.strip())
+
+        return " ".join(parts)
+
+    def _process_divs(self, element: ET.Element, level: int = 1) -> List[Section]:
+        """
+        Recursively process div elements into sections.
+
+        Args:
+            element: XML element to process
+            level: Current heading level
+        Returns:
+            List of sections from this element
+        """
+        sections = []
+
+        for div in element.findall("./tei:div", NS):
+            # Get section heading
+            head = div.find("./tei:head", NS)
+            title = head.text if head is not None and head.text else "Untitled Section"
+
+            # Gather content from child elements in order (p and formula)
+            content_parts = []
+            for child in div:
+                tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if tag in ["p", "formula"]:
+                    text = self._get_element_text(child)
+                    if text:
+                        content_parts.append(text)
+                # Skip head and nested div (handled later)
+                # You might also want to handle other tags here if needed.
+
+            # Create section
+            section = Section(
+                title=title,
+                content="\n\n".join(content_parts),
+                level=level,
+                subsections=[],
+            )
+
+            # Process subsections (nested divs)
+            subsections = self._process_divs(div, level + 1)
+            section.subsections = subsections
+            for subsection in subsections:
+                subsection.parent = section
+
+            sections.append(section)
+
+        return sections
+    
+    def chunk_document(self, sections: List[Section]) -> List[str]:
+        """
+        Create chunks while respecting section boundaries.
+        
+        Args:
+            sections: List of document sections
+        Returns:
+            List of text chunks
+        """
+        if not sections:
+            return []
+    
+        chunks: List[str] = []
+        current_chunk: List[str] = []
+        current_size = 0
+    
+        def process_section(section: Section) -> None:
+            """Process a single section and its subsections."""
+            nonlocal current_chunk, current_size, chunks
+            
+            section_content = section.full_content
+            section_size = len(section_content)
+    
+            if section_size > self.max_chunk_size:
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                    current_chunk = []
+                    current_size = 0
+    
+                words = section_content.split()
+                current_words: List[str] = []
+                current_word_size = 0
+
+                for word in words:
+                    word_size = len(word) + 1  # +1 for space
+                    if current_word_size + word_size > self.max_chunk_size:
+                        if current_words:  # Create chunk from accumulated words
+                            chunk_text = " ".join(current_words)
+                            chunks.append(chunk_text)
+                            # Keep some overlap
+                            overlap_words = current_words[
+                                -self.overlap_size // 10 :
+                            ]  # Approximate words for overlap
+                            current_words = overlap_words + [word]
+                            current_word_size = sum(len(w) + 1 for w in current_words)
+                    else:
+                        current_words.append(word)
+                        current_word_size += word_size
+
+                # Add remaining words if any
+                if current_words:
+                    chunks.append(" ".join(current_words))
+
+            # If section can fit in current chunk with room
+            elif current_size + section_size <= self.max_chunk_size:
+                current_chunk.append(section_content)
+                current_size += section_size
+
+            # If section needs a new chunk
+            else:
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                current_chunk = [section_content]
+                current_size = section_size
+
+            # Process subsections
+            for subsection in section.subsections:
+                process_section(subsection)
+
+        # Process all top-level sections
+        for section in sections:
+            process_section(section)
+
+        # Add final chunk if it exists
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+
+        return [chunk for chunk in chunks if chunk.strip()]
+
+    def get_section_structure(self, sections: List[Section], indent: str = "") -> str:
+        """
+        Generate a readable outline of the document structure.
+
+        Args:
+            sections: List of sections to outline
+            indent: Current indentation string
+        Returns:
+            Formatted string showing document structure
+        """
+        result = []
+        for section in sections:
+            result.append(f"{indent}{str(section)}")
+            if section.subsections:
+                result.append(
+                    self.get_section_structure(section.subsections, indent + "  ")
+                )
+        return "\n".join(result)
+
+
+
+---
+File: tei_chunker/core/interfaces.py
+---
+# tei_chunker/core/interfaces.py
+"""
+Core interfaces for document processing and synthesis.
+"""
+from typing import Protocol, Dict, List, Callable, Optional
+from dataclasses import dataclass, field
+from enum import Enum
+
+class Strategy(Enum):
+    """Available processing strategies."""
+    TOP_DOWN_MAXIMAL = "top_down_maximal"
+    BOTTOM_UP = "bottom_up"
+    HYBRID = "hybrid"
+
+@dataclass
+class ProcessingContext:
+    """Shared context for document processing."""
+    max_tokens: int
+    overlap_tokens: int = 100
+    min_chunk_tokens: int = 500
+
+@dataclass
+class Span:
+    """Represents a span of text in the document."""
+    start: int
+    end: int
+    text: str
+    metadata: Dict = field(default_factory=dict)
+
+@dataclass
+class Feature:
+    """Represents a feature derived from document content."""
+    name: str
+    content: str
+    span: Span
+    metadata: Dict = field(default_factory=dict)
+
+class ContentProcessor(Protocol):
+    """Protocol for content processing functions."""
+    def __call__(self, content: str) -> str: ...
+
+class SynthesisStrategy(Protocol):
+    """Protocol for synthesis strategies."""
+    def synthesize(
+        self,
+        content: str,
+        features: Dict[str, List[Feature]],
+        processor: ContentProcessor,
+        context: ProcessingContext
+    ) -> str: ...
+
+
+
+---
+File: tei_chunker/core/processor.py
+---
+# tei_chunker/core/processor.py
+"""
+Core document processing functionality.
+"""
+from typing import Dict, List, Optional
+from dataclasses import dataclass
+from loguru import logger
+
+from .strategies import TopDownStrategy, BottomUpStrategy, HybridStrategy
+from .interfaces import (
+    Strategy,
+    ProcessingContext,
+    Feature,
+    Span,
+    ContentProcessor,
+    SynthesisStrategy
+)
+
+
+class FeatureAwareProcessor:
+    """
+    Document processor with feature awareness but clean boundaries.
+    """
+    def __init__(
+        self,
+        strategy: Strategy,
+        context: ProcessingContext
+    ):
+        self.strategy = strategy
+        self.context = context
+        
+    def process_with_features(
+        self,
+        content: str,
+        available_features: Dict[str, List[Feature]],
+        process_fn: ContentProcessor
+    ) -> str:
+        """
+        Process content with awareness of available features.
+        
+        Args:
+            content: Document content to process
+            available_features: Map of feature_type -> features
+            process_fn: Function to process content chunks
+        Returns:
+            Processed content
+        """
+        strategy_impl = self._get_strategy_impl(self.strategy)
+        return strategy_impl.synthesize(
+            content,
+            available_features,
+            process_fn,
+            self.context
+        )
+        
+    def _get_strategy_impl(self, strategy: Strategy) -> SynthesisStrategy:
+        """Get concrete strategy implementation."""
+        if strategy == Strategy.TOP_DOWN_MAXIMAL:
+            return TopDownStrategy()
+        elif strategy == Strategy.BOTTOM_UP:
+            return BottomUpStrategy()
+        else:
+            return HybridStrategy()
+            
+    def _estimate_tokens(self, text: str) -> int:
+        """Rough token count estimation."""
+        return len(text.split())
+        
+    def _can_fit_in_context(
+        self,
+        content: str,
+        features: Dict[str, List[Feature]]
+    ) -> bool:
+        """Check if content and features fit in context."""
+        total_tokens = self._estimate_tokens(content)
+        
+        # Add tokens from features
+        for feature_list in features.values():
+            for feature in feature_list:
+                total_tokens += self._estimate_tokens(feature.content)
+                
+        return total_tokens <= self.context.max_tokens
+
+
+
+---
+File: tei_chunker/core/strategies.py
+---
+# tei_chunker/core/strategies.py
+"""
+Implementation of synthesis strategies.
+"""
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+from loguru import logger
+
+from .interfaces import (
+    SynthesisStrategy,
+    Feature,
+    Span,
+    ProcessingContext,
+    ContentProcessor
+)
+
+class TopDownStrategy(SynthesisStrategy):
+    """Try to process maximum content at once."""
+    
+    def synthesize(
+        self,
+        content: str,
+        features: Dict[str, List[Feature]],
+        processor: ContentProcessor,
+        context: ProcessingContext,
+        depth: int = 0  # Add depth parameter
+    ) -> str:
+        # Add recursion limit
+        if depth > 10:  # reasonable limit
+            raise ValueError("Maximum recursion depth exceeded")
+            
+        if self._can_fit_in_context(content, features, context):
+            return self._process_all_at_once(content, features, processor)
+            
+        # Check minimum chunk size
+        if len(content.split()) <= context.min_chunk_tokens:
+            raise ValueError(
+                f"Content size ({len(content.split())} tokens) "
+                f"exceeds context window ({context.max_tokens} tokens) "
+                "and cannot be subdivided further"
+            )
+            
+        sections = self._split_into_sections(content)
+        results = []
+        
+        for section in sections:
+            section_features = self._get_relevant_features(section, features)
+            try:
+                # Pass incremented depth
+                result = self.synthesize(
+                    section.text,
+                    section_features,
+                    processor,
+                    context,
+                    depth + 1
+                )
+                results.append(result)
+            except ValueError as e:
+                # If we hit minimum chunk size, propagate error
+                if "cannot be subdivided further" in str(e):
+                    raise
+                # Otherwise try to split section
+                subsections = self._split_section(
+                    section,
+                    context.max_tokens,
+                    context.overlap_tokens
+                )
+                for sub in subsections:
+                    sub_features = self._get_relevant_features(sub, features)
+                    sub_result = self.synthesize(
+                        sub.text,
+                        sub_features,
+                        processor,
+                        context,
+                        depth + 1
+                    )
+                    results.append(sub_result)
+                    
+        # Final combination
+        combined = "\n\n".join(results)
+        if self._can_fit_in_context(combined, {}, context):
+            return processor(combined)
+            
+        # Split final combination if needed
+        chunks = self._chunk_content(
+            [combined],
+            context.max_tokens,
+            context.overlap_tokens
+        )
+        chunk_results = [processor(chunk) for chunk in chunks]
+        return "\n\n".join(chunk_results)
+        
+    def _can_fit_in_context(
+        self,
+        content: str,
+        features: Dict[str, List[Feature]],
+        context: ProcessingContext
+    ) -> bool:
+        total_tokens = len(content.split())
+        
+        for feats in features.values():
+            for feat in feats:
+                total_tokens += len(feat.content.split())
+                
+        return total_tokens <= context.max_tokens
+        
+    def _process_all_at_once(
+        self,
+        content: str,
+        features: Dict[str, List[Feature]],
+        processor: ContentProcessor
+    ) -> str:
+        parts = [content]
+        
+        for feat_type, feats in features.items():
+            for feat in feats:
+                parts.append(f"{feat_type}:\n{feat.content}")
+                
+        return processor("\n\n".join(parts))
+        
+    def _split_into_sections(self, content: str) -> List[Span]:
+        """Split content into logical sections."""
+        lines = content.split("\n")
+        sections: List[Span] = []
+        current_section: List[str] = []
+        start_pos = 0
+        
+        for line in lines:
+            if self._is_section_header(line) and current_section:
+                # Complete current section
+                section_text = "\n".join(current_section)
+                sections.append(Span(
+                    start=start_pos,
+                    end=start_pos + len(section_text),
+                    text=section_text
+                ))
+                start_pos += len(section_text) + 1  # +1 for newline
+                current_section = []
+                
+            current_section.append(line)
+            
+        # Add final section
+        if current_section:
+            section_text = "\n".join(current_section)
+            sections.append(Span(
+                start=start_pos,
+                end=start_pos + len(section_text),
+                text=section_text
+            ))
+            
+        return sections if sections else [Span(0, len(content), content)]
+        
+    def _is_section_header(self, text: str) -> bool:
+        """Identify section headers."""
+        text = text.strip()
+        if not text:
+            return False
+            
+        # Simple heuristics for headers
+        starts_with_number = any(text.startswith(str(i)) for i in range(10))
+        is_short = len(text.split()) <= 5
+        is_capitalized = text.istitle() or text.isupper()
+        
+        return (starts_with_number or is_capitalized) and is_short
+        
+    def _split_section(
+        self,
+        section: Span,
+        max_tokens: int,
+        overlap_tokens: int
+    ) -> List[Span]:
+        """Split a section into overlapping chunks."""
+        words = section.text.split()
+        chunks = []
+        start_idx = 0
+        
+        while start_idx < len(words):
+            # Calculate end index for this chunk
+            end_idx = start_idx + max_tokens
+            if end_idx > len(words):
+                end_idx = len(words)
+                
+            # Create chunk
+            chunk_text = " ".join(words[start_idx:end_idx])
+            chunk_start = section.start + len(" ".join(words[:start_idx]))
+            if start_idx > 0:
+                chunk_start += 1  # Account for space
+                
+            chunks.append(Span(
+                start=chunk_start,
+                end=chunk_start + len(chunk_text),
+                text=chunk_text,
+                metadata={'type': 'chunk'}
+            ))
+            
+            # Move to next chunk with overlap
+            start_idx = end_idx - overlap_tokens
+            if start_idx < 0:
+                start_idx = 0
+                
+        return chunks
+        
+    def _get_relevant_features(
+        self,
+        span: Span,
+        features: Dict[str, List[Feature]]
+    ) -> Dict[str, List[Feature]]:
+        """Get features relevant to a span."""
+        relevant = {}
+        for name, feature_list in features.items():
+            relevant_features = [
+                f for f in feature_list
+                if f.span.start < span.end and f.span.end > span.start
+            ]
+            if relevant_features:
+                relevant[name] = relevant_features
+        return relevant
+        
+    def _chunk_content(
+        self,
+        content_list: List[str],
+        max_tokens: int,
+        overlap_tokens: int
+    ) -> List[str]:
+        """Split content into overlapping chunks."""
+        chunks: List[str] = []
+        current_chunk: List[str] = []
+        current_tokens = 0
+        
+        for content in content_list:
+            content_tokens = len(content.split())
+            
+            if current_tokens + content_tokens <= max_tokens:
+                current_chunk.append(content)
+                current_tokens += content_tokens
+            else:
+                # Add current chunk if it exists
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                    
+                # Start new chunk with overlap
+                if overlap_tokens > 0 and current_chunk:
+                    # Keep some overlap from previous chunk
+                    words = " ".join(current_chunk).split()
+                    overlap_words = words[-overlap_tokens:]
+                    current_chunk = [" ".join(overlap_words)]
+                    current_tokens = len(overlap_words)
+                else:
+                    current_chunk = []
+                    current_tokens = 0
+                    
+                current_chunk.append(content)
+                current_tokens += content_tokens
+                
+        # Add final chunk
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+            
+        return chunks
+
+class BottomUpStrategy(SynthesisStrategy):
+    """Build synthesis incrementally from leaves up."""
+    def synthesize(
+        self,
+        content: str,
+        features: Dict[str, List[Feature]],
+        processor: ContentProcessor,
+        context: ProcessingContext,
+        depth: int = 0  # Add depth parameter
+    ) -> str:
+        # Prevent infinite recursion
+        if depth > 10:  # reasonable limit
+            raise ValueError("Maximum recursion depth exceeded")
+            
+        # Split into sections
+        spans = self._split_hierarchical(content, context.max_tokens)
+        return self._process_spans_bottom_up(
+            spans, 
+            features, 
+            processor, 
+            context,
+            depth + 1
+        )
+        
+    def _split_hierarchical(
+        self,
+        content: str,
+        max_tokens: int
+    ) -> List[Span]:
+        """Split content preserving hierarchical structure."""
+        # In practice, this would use the XML structure
+        # For now, using simple paragraph-based splitting
+        paragraphs = content.split("\n\n")
+        spans = []
+        current_pos = 0
+        
+        for para in paragraphs:
+            span = Span(
+                start=current_pos,
+                end=current_pos + len(para),
+                text=para,
+                metadata={'type': 'paragraph'}
+            )
+            spans.append(span)
+            current_pos = span.end + 2  # Account for "\n\n"
+            
+        return spans
+        
+    def _process_spans_bottom_up(
+        self,
+        spans: List[Span],
+        features: Dict[str, List[Feature]],
+        processor: ContentProcessor,
+        context: ProcessingContext,
+        depth: int
+    ) -> str:
+        processed_spans = []
+        
+        for span in spans:
+            # Get relevant features for this span
+            span_features = self._get_relevant_features(span, features)
+            
+            # Process span with its features
+            content = span.text
+            if len(content.split()) <= context.max_tokens:
+                result = processor(self._format_for_processing(span, span_features))
+            else:
+                # Split if too large
+                sub_spans = self._split_section(span, context.max_tokens, context.overlap_tokens)
+                sub_results = []
+                for sub in sub_spans:
+                    sub_features = self._get_relevant_features(sub, features)
+                    sub_result = processor(self._format_for_processing(sub, sub_features))
+                    sub_results.append(sub_result)
+                result = "\n\n".join(sub_results)
+                
+            processed_spans.append(result)
+            
+        # Combine processed spans
+        return "\n\n".join(processed_spans)
+    
+    def _split_section(
+        self,
+        section: Span,
+        max_tokens: int,
+        overlap_tokens: int
+    ) -> List[Span]:
+        """Split a section into smaller spans."""
+        words = section.text.split()
+        spans: List[Span] = []
+        
+        start_idx = 0
+        while start_idx < len(words):
+            end_idx = min(start_idx + max_tokens, len(words))
+            chunk_text = " ".join(words[start_idx:end_idx])
+            
+            spans.append(Span(
+                start=section.start + start_idx,
+                end=section.start + end_idx,
+                text=chunk_text
+            ))
+            
+            start_idx = end_idx - overlap_tokens
+            if start_idx < 0:
+                start_idx = 0
+                
+        return spans
+        
+    def _format_for_processing(
+        self,
+        span: Span,
+        features: Dict[str, List[Feature]]
+    ) -> str:
+        parts = [span.text]
+        
+        for feat_type, feats in features.items():
+            for feat in feats:
+                parts.append(f"\n\n{feat_type}: {feat.content}")
+                
+        return "\n\n".join(parts)
+        
+    def _get_relevant_features(
+        self,
+        span: Span,
+        features: Dict[str, List[Feature]]
+    ) -> Dict[str, List[Feature]]:
+        """Get features relevant to a span."""
+        relevant = {}
+        for name, feature_list in features.items():
+            relevant_features = [
+                f for f in feature_list
+                if f.span.start < span.end and f.span.end > span.start
+            ]
+            if relevant_features:
+                relevant[name] = relevant_features
+        return relevant
+
+class HybridStrategy(SynthesisStrategy):
+    """Try top-down first, fall back to bottom-up when needed."""
+    
+    def __init__(self):
+        self.top_down = TopDownStrategy()
+        self.bottom_up = BottomUpStrategy()
+        
+    def synthesize(
+        self,
+        content: str,
+        features: Dict[str, List[Feature]],
+        processor: ContentProcessor,
+        context: ProcessingContext
+    ) -> str:
+        try:
+            return self.top_down.synthesize(
+                content,
+                features,
+                processor,
+                context
+            )
+        except ValueError as e:
+            logger.info(f"Falling back to bottom-up strategy: {e}")
+            return self.bottom_up.synthesize(
+                content,
+                features,
+                processor,
+                context
+            )
+
+
+
+---
+File: tei_chunker/features/manager.py
+---
+# tei_chunker/features/manager.py
+"""
+Feature management and processing.
+"""
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+import json
+from loguru import logger
+
+from ..core.interfaces import (
+    Strategy,
+    ProcessingContext,
+    Feature,
+    Span,
+    ContentProcessor
+)
+from ..core.processor import FeatureAwareProcessor
+from ..core.strategies import TopDownStrategy 
+
+@dataclass
+class FeatureRequest:
+    """Request to generate a new feature."""
+    name: str
+    prompt_template: str
+    strategy: Strategy = Strategy.TOP_DOWN_MAXIMAL
+    context_size: int = 8000
+    overlap_size: int = 200
+    min_chunk_size: int = 500
+    required_features: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+class FeatureStore:
+    """Handles feature persistence and retrieval."""
+    
+    def __init__(self, storage_dir: Path):
+        self.storage_dir = Path(storage_dir)
+        self.features: Dict[str, List[Feature]] = {}
+        self._load_features()
+    
+    def _load_features(self) -> None:
+        """Load existing features from storage."""
+        if not self.storage_dir.exists():
+            return
+            
+        for feature_dir in self.storage_dir.iterdir():
+            if not feature_dir.is_dir():
+                continue
+                
+            feature_type = feature_dir.name
+            self.features[feature_type] = []
+            
+            for content_file in feature_dir.glob("*.md"):
+                meta_file = content_file.with_suffix(".json")
+                if not meta_file.exists():
+                    continue
+                    
+                try:
+                    content = content_file.read_text()
+                    meta_data = json.loads(meta_file.read_text())
+                    
+                    span_data = meta_data['span']
+                    feature = Feature(
+                        name=feature_type,
+                        content=content,
+                        span=Span(
+                            start=span_data['start'],
+                            end=span_data['end'],
+                            text=span_data['text']
+                        ),
+                        metadata=meta_data['metadata']
+                    )
+                    self.features[feature_type].append(feature)
+                except Exception as e:
+                    logger.error(f"Error loading feature {content_file}: {e}")
+                    
+    def save_feature(self, feature: Feature) -> None:
+        """Save a feature to storage."""
+        # Ensure features list exists
+        if feature.name not in self.features:
+            self.features[feature.name] = []
+            
+        # Add to memory
+        self.features[feature.name].append(feature)
+        
+        # Save to disk
+        feature_dir = self.storage_dir / feature.name
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        
+        # Save content
+        content_path = feature_dir / f"{timestamp}.md"
+        content_path.write_text(feature.content)
+        
+        # Save metadata
+        meta_path = feature_dir / f"{timestamp}.json"
+        meta_data = {
+            'span': {
+                'start': feature.span.start,
+                'end': feature.span.end,
+                'text': feature.span.text
+            },
+            'metadata': feature.metadata
+        }
+        meta_path.write_text(json.dumps(meta_data, indent=2))
+        
+    def get_features(
+        self,
+        feature_type: str,
+        span: Optional[Span] = None
+    ) -> List[Feature]:
+        """Get features, optionally filtered by span."""
+        features = self.features.get(feature_type, [])
+        if span is None:
+            return features
+            
+        # Filter by overlapping spans
+        return [
+            f for f in features
+            if (f.span.start < span.end and f.span.end > span.start)
+        ]
+
+class FeatureManager:
+    """
+    Manages feature creation and orchestration.
+    """
+    def __init__(
+        self,
+        storage_dir: Path,
+        xml_processor: Optional[Any] = None  # Your XML processor type
+    ):
+        self.store = FeatureStore(storage_dir)
+        self.xml_processor = xml_processor
+        
+    def process_request(
+        self,
+        content: str,
+        request: FeatureRequest,
+        llm_client: Any  # Your LLM client type
+    ) -> Feature:
+        """Process a feature request."""
+        # Setup context
+        context = ProcessingContext(
+            max_tokens=request.context_size,
+            overlap_tokens=request.overlap_size,
+            min_chunk_tokens=request.min_chunk_size
+        )
+        
+        # Create processor function
+        def process_content(content: str) -> str:
+            return llm_client.complete(
+                request.prompt_template.format(content=content)
+            )
+        
+        # Get required features
+        available_features = {
+            name: self.store.get_features(name)
+            for name in request.required_features
+        }
+        
+        # Create processor
+        processor = FeatureAwareProcessor(
+            strategy=request.strategy,
+            context=context
+        )
+        
+        try:
+            # Process content with features
+            result = processor.process_with_features(
+                content,
+                available_features,
+                process_content
+            )
+            
+            # Create feature
+            feature = Feature(
+                name=request.name,
+                content=result,
+                span=Span(0, len(content), content),
+                metadata={
+                    'created_at': datetime.utcnow().isoformat(),
+                    'strategy': request.strategy.value,
+                    'required_features': request.required_features,
+                    'user_metadata': request.metadata,
+                    'context': {
+                        'max_tokens': context.max_tokens,
+                        'overlap_tokens': context.overlap_tokens,
+                        'min_chunk_tokens': context.min_chunk_tokens
+                    }
+                }
+            )
+            
+            # Store feature
+            self.store.save_feature(feature)
+            
+            return feature
+            
+        except Exception as e:
+            logger.error(f"Error processing feature request: {e}")
+            raise
+            
+    def get_feature_chain(
+        self,
+        feature_type: str,
+        span: Optional[Span] = None
+    ) -> List[Dict[str, List[Feature]]]:
+        """
+        Get a feature and all its dependencies.
+        Returns list of feature maps in dependency order.
+        """
+        chain = []
+        visited = set()
+        
+        def add_dependencies(feat_type: str):
+            if feat_type in visited:
+                return
+                
+            # Get features
+            features = self.store.get_features(feat_type, span)
+            if not features:
+                return
+                
+            # Get required features
+            required = set()
+            for feat in features:
+                required.update(
+                    feat.metadata.get('required_features', [])
+                )
+                
+            # Add dependencies first
+            for dep in required:
+                add_dependencies(dep)
+                
+            # Add this feature type
+            chain.append({feat_type: features})
+            visited.add(feat_type)
+            
+        add_dependencies(feature_type)
+        return chain
+        
+    def get_feature_graph(
+        self,
+        span: Optional[Span] = None
+    ) -> Dict[str, Dict[str, List[Feature]]]:
+        """
+        Get graph of all features and their relationships.
+        Returns map of feature_type -> (dependency_type -> features).
+        """
+        graph = {}
+        
+        # Get all feature types
+        feature_types = set(self.store.features.keys())
+        
+        for feat_type in feature_types:
+            features = self.store.get_features(feat_type, span)
+            if not features:
+                continue
+                
+            # Get required features
+            required = set()
+            for feat in features:
+                required.update(
+                    feat.metadata.get('required_features', [])
+                )
+                
+            # Build dependency map
+            deps = {}
+            for dep in required:
+                dep_features = self.store.get_features(dep, span)
+                if dep_features:
+                    deps[dep] = dep_features
+                    
+            graph[feat_type] = deps
+            
+        return graph
+        
+    def validate_feature_request(
+        self,
+        request: FeatureRequest
+    ) -> List[str]:
+        """
+        Validate a feature request.
+        Returns list of validation errors, empty if valid.
+        """
+        errors = []
+        
+        # Check required features exist
+        for feat_type in request.required_features:
+            if not self.store.features.get(feat_type):
+                errors.append(
+                    f"Required feature type '{feat_type}' does not exist"
+                )
+                
+        # Check for circular dependencies
+        try:
+            self._check_circular_deps(
+                request.name,
+                request.required_features,
+                set()
+            )
+        except ValueError as e:
+            errors.append(str(e))
+            
+        return errors
+        
+    def _check_circular_deps(
+        self,
+        feature_type: str,
+        dependencies: List[str],
+        visited: set
+    ) -> None:
+        """Check for circular dependencies."""
+        if feature_type in visited:
+            path = " -> ".join(visited | {feature_type})
+            raise ValueError(
+                f"Circular dependency detected: {path}"
+            )
+            
+        visited.add(feature_type)
+        
+        for dep in dependencies:
+            # Get features of this type
+            features = self.store.get_features(dep)
+            if not features:
+                continue
+                
+            # Get their dependencies
+            for feat in features:
+                required = feat.metadata.get('required_features', [])
+                self._check_circular_deps(dep, required, visited.copy())
+
+
+
+---
+File: tei_chunker/features/processor.py
+---
+# tei_chunker/features/processor.py
+"""
+Main entry point for feature processing.
+"""
+from pathlib import Path
+from typing import Optional, List, Any
+from loguru import logger
+
+from .manager import FeatureManager, FeatureRequest
+from ..core.interfaces import Strategy, Span
+
+class FeatureProcessor:
+    """
+    High-level interface for feature processing.
+    """
+    def __init__(
+        self,
+        data_dir: Path,
+        llm_client: Any,  # Your LLM client type
+        xml_processor: Optional[Any] = None  # Your XML processor type
+    ):
+        self.data_dir = Path(data_dir)
+        self.llm_client = llm_client
+        self.feature_manager = FeatureManager(
+            self.data_dir / "features",
+            xml_processor
+        )
+        
+    def process_document(
+        self,
+        content: str,
+        requests: List[FeatureRequest]
+    ) -> List[str]:
+        """
+        Process multiple feature requests for a document.
+        Returns list of created feature IDs.
+        """
+        feature_ids = []
+        
+        # Sort requests by dependencies
+        sorted_requests = self._sort_requests(requests)
+        
+        # Process each request
+        for request in sorted_requests:
+            # Validate request
+            errors = self.feature_manager.validate_feature_request(request)
+            if errors:
+                logger.error(
+                    f"Invalid feature request '{request.name}': {errors}"
+                )
+                continue
+                
+            try:
+                # Process request
+                feature = self.feature_manager.process_request(
+                    content,
+                    request,
+                    self.llm_client
+                )
+                feature_ids.append(feature.name)
+                
+            except Exception as e:
+                logger.error(
+                    f"Error processing feature '{request.name}': {e}"
+                )
+                
+        return feature_ids
+        
+    def get_features(
+        self,
+        feature_type: str,
+        span: Optional[Span] = None
+    ) -> List[dict]:
+        """
+        Get features with their metadata.
+        Returns list of feature dictionaries.
+        """
+        features = self.feature_manager.store.get_features(
+            feature_type,
+            span
+        )
+        
+        return [
+            {
+                'id': feat.name,
+                'content': feat.content,
+                'span': {
+                    'start': feat.span.start,
+                    'end': feat.span.end
+                },
+                'metadata': feat.metadata
+            }
+            for feat in features
+        ]
+        
+    def get_feature_dependencies(
+        self,
+        feature_type: str
+    ) -> dict:
+        """Get dependency graph for a feature type."""
+        return self.feature_manager.get_feature_graph()
+        
+    def _sort_requests(
+        self,
+        requests: List[FeatureRequest]
+    ) -> List[FeatureRequest]:
+        """Sort requests by dependencies."""
+        graph = {}
+        for req in requests:
+            graph[req.name] = set(req.required_features)
+            
+        # Find order using topological sort
+        visited = set()
+        temp = set()
+        order = []
+        
+        def visit(name: str):
+            if name in temp:
+                raise ValueError(f"Circular dependency involving {name}")
+            if name in visited:
+                return
+                
+            temp.add(name)
+            
+            # Visit dependencies
+            for dep in graph.get(name, set()):
+                visit(dep)
+                
+            temp.remove(name)
+            visited.add(name)
+            order.append(name)
+            
+        for req in requests:
+            if req.name not in visited:
+                visit(req.name)
+                
+        # Map back to requests
+        name_to_request = {r.name: r for r in requests}
+        return [name_to_request[name] for name in order]
+
+
+
+---
+File: tei_chunker/graph.py
+---
+# tei_chunker/graph.py
+"""
+Core document graph representation with persistence.
+File: tei_chunker/graph.py
+"""
+from dataclasses import dataclass, field, asdict
+from typing import Dict, List, Optional, Any, Set
+from pathlib import Path
+import json
+from datetime import datetime
+import hashlib
+from loguru import logger
+
+@dataclass
+class Node:
+    """Node in the document graph."""
+    id: str
+    content: str
+    type: str
+    span: tuple[int, int]
+    parents: List[str] = field(default_factory=list)
+    children: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'content': self.content,
+            'type': self.type,
+            'span': self.span,
+            'parents': self.parents,
+            'children': self.children,
+            'metadata': self.metadata
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Node':
+        return cls(**data)
+
+@dataclass
+class Feature:
+    """Metadata about a feature type."""
+    name: str
+    version: str
+    source_types: List[str]
+    parameters: Dict[str, Any]
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    
+    def to_dict(self) -> dict:
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Feature':
+        return cls(**data)
+
+class DocumentGraph:
+    """
+    Graph structure for document content and features with persistence.
+    """
+    def __init__(self, content: str):
+        self.content = content
+        self.nodes: Dict[str, Node] = {}
+        self.features: Dict[str, Feature] = {}
+        
+    def generate_id(self, content: str, type: str) -> str:
+        """Generate deterministic node ID."""
+        hash_input = f"{content}:{type}".encode('utf-8')
+        return hashlib.sha256(hash_input).hexdigest()[:12]
+        
+    def add_node(
+        self,
+        content: str,
+        type: str,
+        span: tuple[int, int],
+        parents: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Node:
+        """Add a new node to the graph."""
+        node_id = self.generate_id(content, type)
+        
+        # Update existing node if it exists
+        if node_id in self.nodes:
+            node = self.nodes[node_id]
+            node.content = content
+            node.metadata.update(metadata or {})
+            if parents:
+                for parent_id in parents:
+                    if parent_id not in node.parents:
+                        node.parents.append(parent_id)
+                        self.nodes[parent_id].children.append(node_id)
+            return node
+            
+        # Create new node
+        node = Node(
+            id=node_id,
+            content=content,
+            type=type,
+            span=span,
+            parents=parents or [],
+            children=[],
+            metadata=metadata or {}
+        )
+        
+        # Update parent-child relationships
+        if parents:
+            for parent_id in parents:
+                if parent_id in self.nodes:
+                    self.nodes[parent_id].children.append(node_id)
+                    
+        self.nodes[node_id] = node
+        return node
+        
+    def register_feature(self, feature: Feature) -> None:
+        """Register a new feature type."""
+        self.features[feature.name] = feature
+        
+    def get_nodes_by_type(self, type: str) -> List[Node]:
+        """Get all nodes of a given type."""
+        return [n for n in self.nodes.values() if n.type == type]
+        
+    def get_feature_nodes(self, feature_name: str) -> List[Node]:
+        """Get all nodes for a specific feature."""
+        return self.get_nodes_by_type(f"feature:{feature_name}")
+        
+    def get_overlapping_nodes(
+        self,
+        span: tuple[int, int],
+        exclude_ids: Optional[Set[str]] = None
+    ) -> List[Node]:
+        """Find nodes that overlap with the given span."""
+        start, end = span
+        exclude_ids = exclude_ids or set()
+        
+        return [
+            node for node in self.nodes.values()
+            if node.id not in exclude_ids
+            and not (end <= node.span[0] or start >= node.span[1])
+        ]
+        
+    def get_node_ancestors(self, node_id: str) -> List[Node]:
+        """Get all ancestors of a node."""
+        ancestors = []
+        queue = [node_id]
+        seen = set()
+        
+        while queue:
+            current_id = queue.pop(0)
+            if current_id in seen:
+                continue
+                
+            seen.add(current_id)
+            if current_id in self.nodes:
+                node = self.nodes[current_id]
+                ancestors.append(node)
+                queue.extend(node.parents)
+                
+        return ancestors[1:]  # Exclude the starting node
+        
+    def get_node_descendants(self, node_id: str) -> List[Node]:
+        """Get all descendants of a node."""
+        descendants = []
+        queue = [node_id]
+        seen = set()
+        
+        while queue:
+            current_id = queue.pop(0)
+            if current_id in seen:
+                continue
+                
+            seen.add(current_id)
+            if current_id in self.nodes:
+                node = self.nodes[current_id]
+                descendants.append(node)
+                queue.extend(node.children)
+                
+        return descendants[1:]  # Exclude the starting node
+        
+    def save(self, path: Path) -> None:
+        """Save the graph to disk."""
+        data = {
+            'content': self.content,
+            'nodes': {id: node.to_dict() for id, node in self.nodes.items()},
+            'features': {name: feat.to_dict() for name, feat in self.features.items()}
+        }
+        
+        path.write_text(json.dumps(data, indent=2))
+        logger.info(f"Saved document graph to {path}")
+        
+    @classmethod
+    def load(cls, path: Path) -> 'DocumentGraph':
+        """Load a graph from disk."""
+        data = json.loads(path.read_text())
+        
+        graph = cls(content=data['content'])
+        graph.nodes = {
+            id: Node.from_dict(node_data)
+            for id, node_data in data['nodes'].items()
+        }
+        graph.features = {
+            name: Feature.from_dict(feat_data)
+            for name, feat_data in data['features'].items()
+        }
+        
+        logger.info(f"Loaded document graph from {path}")
+        return graph
+
+
+
+---
+File: tei_chunker/service.py
+---
+# tei_chunker/service.py
+"""
+HTTP service for TEI document chunking.
+"""
+from typing import List, Dict, Any
+import json
+from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from loguru import logger
+
+from .chunking import HierarchicalChunker
+
+
+class ChunkingHandler(BaseHTTPRequestHandler):
+    """Handles HTTP requests for document chunking."""
+
+    chunker = HierarchicalChunker(max_chunk_size=20000, overlap_size=200)
+
+    def do_POST(self) -> None:
+        """Handle POST requests with XML content."""
+        try:
+            # Get content length
+            content_length = int(self.headers["Content-Length"])
+
+            # Read XML content
+            xml_content = self.rfile.read(content_length).decode("utf-8")
+
+            # Process the document
+            sections = self.chunker.parse_grobid_xml(xml_content)
+            chunks = self.chunker.chunk_document(sections)
+
+            # Prepare response
+            response = {
+                "chunks": chunks,
+                "chunk_count": len(chunks),
+                "sections": [
+                    {
+                        "title": section.title,
+                        "level": section.level,
+                        "length": len(section.content),
+                        "subsection_count": len(section.subsections),
+                    }
+                    for section in sections
+                ],
+            }
+
+            # Send response
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+
+        except Exception as e:
+            logger.error(f"Error processing request: {e}")
+            self.send_error(500, str(e))
+
+    def do_GET(self) -> None:
+        """Handle GET requests with simple health check."""
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+
+        response = {"status": "healthy", "version": self.chunker.__version__}
+        self.wfile.write(json.dumps(response).encode())
+
+
+def run_server(host: str = "0.0.0.0", port: int = 8000) -> None:
+    """Run the chunking service."""
+    server = HTTPServer((host, port), ChunkingHandler)
+    logger.info(f"Starting chunking service on {host}:{port}")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("Shutting down chunking service")
+        server.server_close()
+
+
+if __name__ == "__main__":
+    run_server()
+
+
+
+---
+File: tei_chunker/synthesis/advanced.py
+---
+# tei_chunker/synthesis/advanced.py
+"""
+Advanced synthesis strategies for complex feature combinations.
+File: tei_chunker/synthesis/advanced.py
+"""
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
+from enum import Enum
+
+from .base import Synthesizer, SynthesisNode
+from .prompts import SynthesisPrompt
+
+class SynthesisMode(Enum):
+    AGGREGATE = "aggregate"  # Combine multiple features into one
+    CROSS_REFERENCE = "cross_reference"  # Cross-reference between features
+    COMPARATIVE = "comparative"  # Compare different feature perspectives
+    TEMPORAL = "temporal"  # Time-based synthesis
+    CONTEXTUAL = "contextual"  # Use broader document context
+
+@dataclass
+class FeatureDependency:
+    """Defines relationships between features."""
+    source_feature: str
+    target_feature: str
+    relationship: str  # e.g., "requires", "enhances", "contradicts"
+    priority: int = 1
+
+class AdvancedSynthesizer(Synthesizer):
+    """Advanced synthesis strategies for complex feature relationships."""
+    
+    def __init__(self, graph):
+        super().__init__(graph)
+        self.dependencies: List[FeatureDependency] = []
+        
+    def register_dependency(self, dependency: FeatureDependency) -> None:
+        """Register a feature dependency."""
+        self.dependencies.append(dependency)
+        
+    def synthesize_with_dependencies(
+        self,
+        tree: SynthesisNode,
+        target_feature: str,
+        mode: SynthesisMode
+    ) -> None:
+        """Synthesize features respecting dependencies."""
+        # Get relevant dependencies
+        deps = [d for d in self.dependencies if d.target_feature == target_feature]
+        deps.sort(key=lambda x: x.priority)
+        
+        # Process in dependency order
+        processed_features = set()
+        for dep in deps:
+            if dep.source_feature not in processed_features:
+                self._process_dependency(tree, dep, mode)
+                processed_features.add(dep.source_feature)
+                
+    def _process_dependency(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency,
+        mode: SynthesisMode
+    ) -> None:
+        """Process a single dependency."""
+        if mode == SynthesisMode.AGGREGATE:
+            self._aggregate_synthesis(tree, dependency)
+        elif mode == SynthesisMode.CROSS_REFERENCE:
+            self._cross_reference_synthesis(tree, dependency)
+        elif mode == SynthesisMode.COMPARATIVE:
+            self._comparative_synthesis(tree, dependency)
+        elif mode == SynthesisMode.TEMPORAL:
+            self._temporal_synthesis(tree, dependency)
+        elif mode == SynthesisMode.CONTEXTUAL:
+            self._contextual_synthesis(tree, dependency)
+            
+    def _aggregate_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Combine multiple features into a cohesive whole."""
+        prompt = SynthesisPrompt(
+            template="""
+            Combine these related features into a unified analysis.
+            Consider how they complement and reinforce each other.
+            
+            Source Feature ({source_type}):
+            {source_content}
+            
+            Target Feature ({target_type}):
+            {target_content}
+            
+            Relationship: {relationship}
+            
+            Synthesized Analysis:
+            """,
+            constraints=[
+                "Maintain semantic relationships",
+                "Preserve key insights from both features",
+                "Explain feature interactions"
+            ]
+        )
+        
+        def process_node(node: SynthesisNode) -> str:
+            source_content = node.get_feature_content(dependency.source_feature)
+            target_content = node.get_feature_content(dependency.target_feature)
+            
+            return prompt.format(
+                source_type=dependency.source_feature,
+                source_content="\n".join(source_content),
+                target_type=dependency.target_feature,
+                target_content="\n".join(target_content),
+                relationship=dependency.relationship
+            )
+            
+        self.synthesize(
+            tree,
+            process_node,
+            f"aggregated_{dependency.target_feature}",
+            bottom_up=True
+        )
+        
+    def _cross_reference_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Cross-reference between related features."""
+        prompt = SynthesisPrompt(
+            template="""
+            Analyze how these features reference and support each other.
+            Identify connections, confirmations, and potential contradictions.
+            
+            Primary Feature ({source_type}):
+            {source_content}
+            
+            Reference Feature ({target_type}):
+            {target_content}
+            
+            Cross-Reference Analysis:
+            1. Confirmed Points:
+            2. Complementary Information:
+            3. Potential Contradictions:
+            4. Synthesis:
+            """,
+            constraints=[
+                "Explicitly link related points",
+                "Note confirmation strength",
+                "Highlight unique contributions"
+            ]
+        )
+        
+        # Implementation similar to _aggregate_synthesis
+        
+    def _comparative_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Compare different feature perspectives."""
+        prompt = SynthesisPrompt(
+            template="""
+            Compare and contrast these feature perspectives.
+            Analyze areas of agreement, disagreement, and complementarity.
+            
+            Feature 1 ({source_type}):
+            {source_content}
+            
+            Feature 2 ({target_type}):
+            {target_content}
+            
+            Comparative Analysis:
+            1. Areas of Agreement:
+            2. Different Perspectives:
+            3. Complementary Insights:
+            4. Integrated View:
+            """,
+            constraints=[
+                "Balance perspective coverage",
+                "Explain disagreements",
+                "Justify integrated view"
+            ]
+        )
+        
+        # Implementation similar to above
+        
+    def _temporal_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Time-based synthesis of features."""
+        prompt = SynthesisPrompt(
+            template="""
+            Analyze how these features relate across time.
+            Consider evolution, changes, and temporal relationships.
+            
+            Earlier Feature ({source_type}):
+            {source_content}
+            
+            Later Feature ({target_type}):
+            {target_content}
+            
+            Temporal Analysis:
+            1. Changes Over Time:
+            2. Evolving Understanding:
+            3. Temporal Patterns:
+            4. Integrated Timeline:
+            """,
+            constraints=[
+                "Maintain chronological clarity",
+                "Track changes explicitly",
+                "Note temporal patterns"
+            ]
+        )
+        
+        # Implementation similar to above
+        
+    def _contextual_synthesis(
+        self,
+        tree: SynthesisNode,
+        dependency: FeatureDependency
+    ) -> None:
+        """Context-aware feature synthesis."""
+        prompt = SynthesisPrompt(
+            template="""
+            Synthesize these features considering their broader context.
+            Consider document-wide patterns and relationships.
+            
+            Local Feature ({source_type}):
+            {source_content}
+            
+            Context Feature ({target_type}):
+            {target_content}
+            
+            Document Context:
+            {context}
+            
+            Contextual Analysis:
+            1. Local Insights:
+            2. Contextual Patterns:
+            3. Broader Implications:
+            4. Integrated Understanding:
+            """,
+            constraints=[
+                "Connect local and global insights",
+                "Explain contextual relevance",
+                "Maintain coherence across scales"
+            ]
+        )
+        
+        # Implementation similar to above
+
+
+
+---
+File: tei_chunker/synthesis/base.py
+---
+# tei_chunker/synthesis/base.py
+"""
+Base classes for document synthesis.
+"""
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Any, Callable, Set
+from pathlib import Path
+from datetime import datetime, timezone
+from loguru import logger
+
+from ..core.interfaces import Feature, Span
+from ..graph import DocumentGraph, Node
+
+@dataclass
+class SynthesisNode:
+    """Node in the synthesis tree."""
+    node_id: str
+    feature_type: str
+    content: str
+    children: List['SynthesisNode']
+    overlapping: List['SynthesisNode']
+    metadata: Dict[str, Any]
+    
+    def get_feature_content(self, feature_type: str) -> List[str]:
+        """Get all content of a specific feature type in this subtree."""
+        content: List[str] = []
+        
+        # Get features from this node's metadata
+        features = self.metadata.get('features', {}).get(feature_type, [])
+        if features:
+            content.extend(feat.content for feat in features)
+            
+        for child in self.children:
+            content.extend(child.get_feature_content(feature_type))
+            
+        return content
+        
+    def get_overlapping_content(self, feature_type: str) -> List[str]:
+        """Get feature content from overlapping nodes."""
+        content = []
+        
+        for overlap in self.overlapping:
+            if features := overlap.metadata.get('features', {}).get(feature_type, []):
+                content.extend(feat.content for feat in features)
+                
+        return content
+
+class Synthesizer:
+    """
+    Base class for document synthesis operations.
+    """
+    def __init__(self, graph: DocumentGraph):
+        self.graph = graph
+        self.synthesis_cache: Dict[str, SynthesisNode] = {}
+        
+    def get_synthesis_tree(
+        self,
+        root_node: Node,
+        feature_types: List[str],
+        max_depth: Optional[int] = None,
+        visited: Optional[Set[str]] = None
+    ) -> SynthesisNode:
+        """Build synthesis tree from document graph."""
+        # Initialize visited set if not provided
+        if visited is None:
+            visited = set()
+            
+        # Check if we've already visited this node
+        if root_node.id in visited:
+            return None  # Skip to avoid cycles
+            
+        # Add node to visited set
+        visited.add(root_node.id)
+        
+        # Check cache
+        cache_key = f"{root_node.id}:{':'.join(feature_types)}:{max_depth}"
+        if cache_key in self.synthesis_cache:
+            return self.synthesis_cache[cache_key]
+            
+        # Get features for this node
+        features = {}
+        for feat_type in feature_types:
+            features[feat_type] = [
+                n for n in self.graph.get_feature_nodes(feat_type)
+                if root_node.span[0] <= n.span[0] and root_node.span[1] >= n.span[1]
+            ]
+            
+        # Process children if within depth limit
+        children = []
+        if max_depth != 0:
+            next_depth = max_depth - 1 if max_depth else None
+            for child_id in root_node.children:
+                if child := self.graph.nodes.get(child_id):
+                    if child_tree := self.get_synthesis_tree(
+                        child,
+                        feature_types,
+                        next_depth,
+                        visited.copy()  # Pass copy of visited set
+                    ):
+                        children.append(child_tree)
+                    
+        # Get overlapping nodes
+        overlapping = []
+        overlap_nodes = self.graph.get_overlapping_nodes(
+            root_node.span,
+            exclude_ids={root_node.id} | visited  # Exclude already visited nodes
+        )
+        for node in overlap_nodes:
+            if overlap_tree := self.get_synthesis_tree(
+                node,
+                feature_types,
+                max_depth=1,  # Limit overlap depth
+                visited=visited.copy()  # Pass copy of visited set
+            ):
+                overlapping.append(overlap_tree)
+            
+        # Create synthesis node
+        syn_node = SynthesisNode(
+            node_id=root_node.id,
+            feature_type=root_node.type,
+            content=root_node.content,
+            children=children,
+            overlapping=overlapping,
+            metadata={
+                'features': features,
+                'span': root_node.span,
+                'node_metadata': root_node.metadata
+            }
+        )
+        
+        self.synthesis_cache[cache_key] = syn_node
+        return syn_node
+        
+    def synthesize(
+        self,
+        tree: SynthesisNode,
+        process_fn: Callable[[SynthesisNode], str],
+        feature_name: str,
+        version: str = "1.0",
+        bottom_up: bool = True
+    ) -> None:
+        """
+        Synthesize features across a subtree.
+        
+        Args:
+            tree: Synthesis tree to process
+            process_fn: Function to generate synthesized content
+            feature_name: Name for the synthesized feature
+            version: Version string for the feature
+            bottom_up: If True, process children before parents
+        """
+        def process_node(node: SynthesisNode) -> None:
+            # Process children first if bottom-up
+            if bottom_up:
+                for child in node.children:
+                    process_node(child)
+                    
+            # Generate synthesis
+            synthesized = process_fn(node)
+            
+            # Add to graph
+            self.graph.add_node(
+                content=synthesized,
+                type=f"feature:{feature_name}",
+                span=node.metadata['span'],
+                parents=[node.node_id],
+                metadata={
+                    'synthesized_from': [
+                        n.node_id for n in node.children + node.overlapping
+                    ],
+                    'feature_version': version,
+                    'synthesized_at': datetime.now(timezone.utc).isoformat()
+                }
+            )
+            
+            # Process children last if top-down
+            if not bottom_up:
+                for child in node.children:
+                    process_node(child)
+        
+        # Process entire tree
+        process_node(tree)
+        
+    def format_for_llm(
+        self,
+        node: SynthesisNode,
+        feature_types: List[str],
+        max_depth: Optional[int] = None,
+        current_depth: int = 0,
+        include_overlapping: bool = True
+    ) -> str:
+        """Format a synthesis node's content for LLM input."""
+        if max_depth is not None and current_depth > max_depth:
+            return ""
+            
+        parts = []
+        indent = "  " * current_depth
+        
+        # Add node type and content
+        parts.append(f"{indent}[{node.feature_type}]")
+        parts.append(f"{indent}{node.content}\n")
+        
+        # Add features
+        for feat_type in feature_types:
+            if features := node.metadata['features'].get(feat_type, []):
+                parts.append(f"{indent}[{feat_type}]")
+                for feat in features:
+                    parts.append(f"{indent}{feat.content}\n")
+                    
+        # Add overlapping content if requested
+        if include_overlapping and node.overlapping:
+            parts.append(f"{indent}[overlapping content]")
+            for overlap in node.overlapping:
+                overlap_text = self.format_for_llm(
+                    overlap,
+                    feature_types,
+                    max_depth=1,
+                    current_depth=current_depth + 1
+                )
+                if overlap_text:
+                    parts.append(overlap_text)
+                    
+        # Add children
+        for child in node.children:
+            child_text = self.format_for_llm(
+                child,
+                feature_types,
+                max_depth,
+                current_depth + 1,
+                include_overlapping
+            )
+            if child_text:
+                parts.append(child_text)
+                
+        return "\n".join(parts)
+
+
+
+---
+File: tei_chunker/synthesis/patterns.py
+---
+# tei_chunker/synthesis/patterns.py
+"""
+Implementation of common synthesis patterns.
+File: tei_chunker/synthesis/patterns.py
+"""
+from typing import List, Dict, Optional, Any, Callable
+from enum import Enum
+from dataclasses import dataclass
+from datetime import datetime
+from loguru import logger
+
+from .base import Synthesizer, SynthesisNode
+from .prompts import PromptTemplates
+
+class SynthesisStrategy(Enum):
+    """Available synthesis strategies."""
+    HIERARCHICAL = "hierarchical"  # Maintain document hierarchy
+    FLAT = "flat"                 # Flatten and synthesize all at once
+    INCREMENTAL = "incremental"   # Build up synthesis gradually
+
+class FeatureSynthesizer(Synthesizer):
+    """
+    Implementation of common synthesis patterns.
+    """
+    def __init__(self, graph):
+        super().__init__(graph)
+        self.prompts = PromptTemplates()
+        
+    def hierarchical_summary(
+        self,
+        tree: SynthesisNode,
+        max_length: int = 500
+    ) -> None:
+        """
+        Create hierarchical summary synthesis.
+        
+        Args:
+            tree: Root of synthesis tree
+            max_length: Maximum length for each summary
+        """
+        prompt = self.prompts.hierarchical_summary(max_length)
+        
+        def process_node(node: SynthesisNode) -> str:
+            # Format input for LLM
+            context = self.format_for_llm(
+                node,
+                feature_types=["summary", "key_findings"]
+            )
+            
+            return prompt.format(
+                structure=self._format_structure(node),
+                features=context
+            )
+            
+        self.synthesize(
+            tree,
+            process_node,
+            feature_name="hierarchical_summary",
+            version="1.0",
+            bottom_up=True
+        )
+        
+    def resolve_conflicts(
+        self,
+        tree: SynthesisNode,
+        feature_type: str
+    ) -> None:
+        """
+        Resolve conflicts between overlapping features.
+        
+        Args:
+            tree: Root of synthesis tree
+            feature_type: Type of feature to resolve
+        """
+        prompt = self.prompts.conflict_resolution()
+        
+        def process_node(node: SynthesisNode) -> str:
+            main_content = node.get_feature_content(feature_type)
+            overlapping = node.get_overlapping_content(feature_type)
+            
+            if not overlapping:
+                return "\n".join(main_content)
+                
+            return prompt.format(
+                main_content="\n".join(main_content),
+                overlapping_content="\n".join(overlapping)
+            )
+            
+        self.synthesize(
+            tree,
+            process_node,
+            feature_name=f"resolved_{feature_type}",
+            version="1.0",
+            bottom_up=True
+        )
+        
+    def evidence_graded_synthesis(
+        self,
+        tree: SynthesisNode,
+        feature_types: List[str],
+        confidence_threshold: float = 0.8
+    ) -> None:
+        """
+        Create synthesis with evidence grading.
+        
+        Args:
+            tree: Root of synthesis tree
+            feature_types: Types of features to synthesize
+            confidence_threshold: Minimum confidence threshold
+        """
+        prompt = self.prompts.evidence_graded(confidence_threshold)
+        
+        def process_node(node: SynthesisNode) -> str:
+            findings = []
+            for feat_type in feature_types:
+                findings.extend(node.get_feature_content(feat_type))
+                findings.extend(node.get_overlapping_content(feat_type))
+                
+            return prompt.format(
+                findings="\n\n".join(findings),
+                confidence_threshold=confidence_threshold
+            )
+            
+        self.synthesize(
+            tree,
+            process_node,
+            feature_name="evidence_graded",
+            version="1.0",
+            bottom_up=True
+        )
+        
+    def incremental_synthesis(
+        self,
+        tree: SynthesisNode,
+        feature_sequence: List[str]
+    ) -> None:
+        """
+        Build up synthesis incrementally across features.
+        
+        Args:
+            tree: Root of synthesis tree
+            feature_sequence: Order of features to incorporate
+        """
+        current_synthesis = ""
+        
+        for feature_type in feature_sequence:
+            prompt = self.prompts.incremental_feature(feature_type)
+            
+            def process_node(node: SynthesisNode) -> str:
+                new_content = node.get_feature_content(feature_type)
+                return prompt.format(
+                    current_synthesis=current_synthesis,
+                    feature_type=feature_type,
+                    new_feature="\n".join(new_content)
+                )
+                
+            self.synthesize(
+                tree,
+                process_node,
+                feature_name=f"incremental_{len(feature_sequence)}",
+                version="1.0",
+                bottom_up=True
+            )
+            
+            # Update current synthesis with new feature
+            current_synthesis = self.graph.get_feature_nodes(
+                f"incremental_{len(feature_sequence)}"
+            )[0].content
+            
+    def _format_structure(self, node: SynthesisNode, depth: int = 0) -> str:
+        """Helper to format document structure."""
+        parts = [f"{'  ' * depth}{node.feature_type}: {node.content[:100]}..."]
+        for child in node.children:
+            parts.append(self._format_structure(child, depth + 1))
+        return "\n".join(parts)
+
+
+
+---
+File: tei_chunker/synthesis/prompts.py
+---
+# tei_chunker/synthesis/prompts.py
+"""
+LLM prompting templates for document synthesis.
+File: tei_chunker/synthesis/prompts.py
+"""
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Any
+
+@dataclass
+class SynthesisPrompt:
+    """Template for synthesis prompts."""
+    template: str
+    examples: Optional[List[Dict[str, str]]] = None
+    constraints: Optional[List[str]] = None
+    
+    def format(self, **kwargs) -> str:
+        """Format prompt with provided values."""
+        prompt_parts = [self.template.format(**kwargs)]
+        
+        if self.examples:
+            prompt_parts.append("\nExamples:")
+            for example in self.examples:
+                for key, value in example.items():
+                    prompt_parts.append(f"{key}:\n{value}")
+                prompt_parts.append("")
+                
+        if self.constraints:
+            prompt_parts.append("\nConstraints:")
+            for constraint in self.constraints:
+                prompt_parts.append(f"- {constraint}")
+                
+        return "\n".join(prompt_parts)
+
+class PromptTemplates:
+    """Collection of common synthesis prompt templates."""
+    
+    @staticmethod
+    def hierarchical_summary(max_length: int = 500) -> SynthesisPrompt:
+        """Template for hierarchical summary synthesis."""
+        return SynthesisPrompt(
+            template="""
+            Synthesize a coherent summary from these section summaries and their relationships.
+            Preserve key insights while resolving any conflicts.
+            
+            Section Structure:
+            {structure}
+            
+            Features to Synthesize:
+            {features}
+            
+            Synthesized Summary:
+            """,
+            constraints=[
+                f"Maximum length: {max_length} characters",
+                "Maintain narrative flow between sections",
+                "Resolve any contradictions between sections",
+                "Preserve specific numbers and key findings"
+            ]
+        )
+    
+    @staticmethod
+    def conflict_resolution() -> SynthesisPrompt:
+        """Template for resolving conflicts between features."""
+        return SynthesisPrompt(
+            template="""
+            Review these potentially conflicting analyses and synthesize a coherent view.
+            Explicitly address any contradictions or inconsistencies.
+            
+            Main Analysis:
+            {main_content}
+            
+            Overlapping Analyses:
+            {overlapping_content}
+            
+            Please:
+            1. Identify any conflicts between these analyses
+            2. Evaluate the evidence for conflicting claims
+            3. Provide a synthesized analysis that:
+               - Resolves conflicts with clear reasoning
+               - Preserves well-supported findings
+               - Acknowledges uncertainty where appropriate
+            
+            Synthesized Analysis:
+            """,
+            constraints=[
+                "Must explicitly address each conflict",
+                "Must preserve source evidence",
+                "Must indicate confidence levels"
+            ]
+        )
+    
+    @staticmethod
+    def evidence_graded(confidence_threshold: float = 0.8) -> SynthesisPrompt:
+        """Template for evidence-graded synthesis."""
+        return SynthesisPrompt(
+            template="""
+            Synthesize these findings while evaluating evidence strength.
+            
+            Findings:
+            {findings}
+            
+            For each finding, provide:
+            1. Synthesized statement
+            2. Evidence strength (Strong|Moderate|Weak)
+            3. Supporting/Conflicting evidence
+            
+            Confidence Threshold: {confidence_threshold}
+            
+            Evidence-Graded Synthesis:
+            """,
+            constraints=[
+                f"Must meet {confidence_threshold} confidence threshold",
+                "Must grade all evidence",
+                "Must explain confidence ratings"
+            ]
+        )
+    
+    @staticmethod
+    def citation_preserving() -> SynthesisPrompt:
+        """Template for citation-preserving synthesis."""
+        return SynthesisPrompt(
+            template="""
+            Synthesize these findings while preserving citation links.
+            
+            Source Material:
+            {source_material}
+            
+            Required Citation Types:
+            {citation_types}
+            
+            Guidelines:
+            1. Maintain all relevant citations
+            2. Group related findings
+            3. Indicate strength of evidence
+            
+            Synthesized Result (with citations):
+            """,
+            constraints=[
+                "Must preserve all citation links",
+                "Must indicate evidence strength",
+                "Must group related findings"
+            ]
+        )
+    
+    @staticmethod
+    def incremental_feature(feature_type: str) -> SynthesisPrompt:
+        """Template for incremental feature synthesis."""
+        return SynthesisPrompt(
+            template="""
+            Incorporate this new feature into the existing synthesis.
+            
+            Current Synthesis:
+            {current_synthesis}
+            
+            New Feature to Incorporate ({feature_type}):
+            {new_feature}
+            
+            Updated Synthesis:
+            """,
+            constraints=[
+                "Must preserve key information from current synthesis",
+                "Must integrate new feature naturally",
+                "Must maintain overall coherence"
+            ]
+        )
+
+
+
+---
+File: tei_chunker/synthesis/strategies.py
+---
+# tei_chunker/synthesis/strategies.py
+"""
+Implementation of tree synthesis strategies.
+File: tei_chunker/synthesis/strategies.py
+"""
+from enum import Enum
+from typing import List, Dict, Optional, Callable
+from dataclasses import dataclass
+from loguru import logger
+
+from .base import SynthesisNode
+
+class TreeStrategy(Enum):
+    """Available tree synthesis strategies."""
+    TOP_DOWN_MAXIMAL = "top_down_maximal"  # Try root first, subdivide if needed
+    BOTTOM_UP = "bottom_up"                # Build up from leaves
+    HYBRID = "hybrid"                      # Try top-down, fall back to bottom-up if needed
+
+@dataclass
+class SynthesisContext:
+    """Context for synthesis operations."""
+    max_tokens: int
+    feature_types: List[str]
+    overlap_tokens: int = 100
+    min_chunk_tokens: int = 500  # Don't subdivide below this size
+
+class TreeSynthesizer:
+    """
+    Implements different tree synthesis strategies.
+    """
+    def __init__(
+        self,
+        strategy: TreeStrategy,
+        context: SynthesisContext,
+        process_fn: Callable[[str], str]
+    ):
+        self.strategy = strategy
+        self.context = context
+        self.process_fn = process_fn
+        
+    def synthesize_tree(
+        self,
+        tree: SynthesisNode,
+        parent_result: Optional[str] = None
+    ) -> str:
+        """
+        Synthesize a tree using the selected strategy.
+        
+        Args:
+            tree: Root of the synthesis tree
+            parent_result: Result from parent node (for hybrid strategy)
+        Returns:
+            Synthesized content
+        """
+        if self.strategy == TreeStrategy.TOP_DOWN_MAXIMAL:
+            return self._synthesize_top_down(tree)
+        elif self.strategy == TreeStrategy.BOTTOM_UP:
+            return self._synthesize_bottom_up(tree)
+        else:  # HYBRID
+            try:
+                return self._synthesize_top_down(tree)
+            except ValueError as e:
+                logger.info(f"Falling back to bottom-up strategy: {e}")
+                return self._synthesize_bottom_up(tree)
+                
+    def _estimate_tokens(self, content: str) -> int:
+        """Rough estimate of token count."""
+        return len(content.split())
+        
+    def _can_fit_in_context(self, tree: SynthesisNode) -> bool:
+        """Check if tree content fits in context window."""
+        total_tokens = 0
+        
+        # Get all feature content
+        for feat_type in self.context.feature_types:
+            content = tree.get_feature_content(feat_type)
+            total_tokens += sum(self._estimate_tokens(c) for c in content)
+            
+        # Check overlapping content
+        for overlap in tree.overlapping:
+            for feat_type in self.context.feature_types:
+                content = overlap.get_feature_content(feat_type)
+                total_tokens += sum(self._estimate_tokens(c) for c in content)
+                
+        return total_tokens <= self.context.max_tokens
+        
+    def _synthesize_top_down(self, tree: SynthesisNode) -> str:
+        """
+        Try to synthesize entire tree at once, subdividing only if necessary.
+        """
+        # Check if we can process the entire tree
+        if self._can_fit_in_context(tree):
+            # Collect all content
+            all_content = []
+            for feat_type in self.context.feature_types:
+                content = tree.get_feature_content(feat_type)
+                if content:
+                    all_content.extend(content)
+                    
+            # Include relevant overlapping content
+            for overlap in tree.overlapping:
+                for feat_type in self.context.feature_types:
+                    content = overlap.get_feature_content(feat_type)
+                    if content:
+                        all_content.extend(content)
+                        
+            # Process everything at once
+            return self.process_fn("\n\n".join(all_content))
+            
+        # If tree is too large, check if it's subdividable
+        if not tree.children or self._estimate_tokens(tree.content) <= self.context.min_chunk_tokens:
+            raise ValueError(
+                f"Content size ({self._estimate_tokens(tree.content)} tokens) "
+                f"exceeds context window ({self.context.max_tokens} tokens) "
+                "and cannot be subdivided further"
+            )
+            
+        # Process children separately
+        child_results = []
+        for child in tree.children:
+            result = self._synthesize_top_down(child)
+            child_results.append(result)
+            
+        # Combine child results
+        combined = "\n\n".join(child_results)
+        if self._estimate_tokens(combined) <= self.context.max_tokens:
+            return self.process_fn(combined)
+        else:
+            # Need to synthesize child results in chunks
+            chunks = self._chunk_content(
+                child_results,
+                self.context.max_tokens,
+                self.context.overlap_tokens
+            )
+            chunk_results = [self.process_fn(chunk) for chunk in chunks]
+            return self.process_fn("\n\n".join(chunk_results))
+            
+    def _synthesize_bottom_up(self, tree: SynthesisNode) -> str:
+        """
+        Build synthesis from leaves up to root.
+        """
+        # Process leaves first
+        if tree.children:
+            child_results = []
+            for child in tree.children:
+                result = self._synthesize_bottom_up(child)
+                child_results.append(result)
+                
+            # Combine child results with current node
+            all_content = [tree.content] + child_results
+            
+            # Check if we need to chunk
+            if sum(self._estimate_tokens(c) for c in all_content) <= self.context.max_tokens:
+                return self.process_fn("\n\n".join(all_content))
+            else:
+                # Process in chunks
+                chunks = self._chunk_content(
+                    all_content,
+                    self.context.max_tokens,
+                    self.context.overlap_tokens
+                )
+                chunk_results = [self.process_fn(chunk) for chunk in chunks]
+                return self.process_fn("\n\n".join(chunk_results))
+        else:
+            # Leaf node - process directly
+            return self.process_fn(tree.content)
+            
+    def _chunk_content(
+        self,
+        content_list: List[str],
+        max_tokens: int,
+        overlap_tokens: int
+    ) -> List[str]:
+        """Split content into overlapping chunks."""
+        chunks = []
+        current_chunk = []
+        current_tokens = 0
+        
+        for content in content_list:
+            content_tokens = self._estimate_tokens(content)
+            
+            if current_tokens + content_tokens <= max_tokens:
+                current_chunk.append(content)
+                current_tokens += content_tokens
+            else:
+                # Add current chunk if it exists
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                    
+                # Start new chunk with overlap
+                if overlap_tokens > 0:
+                    # Find overlap content from previous chunk
+                    overlap_content = []
+                    overlap_size = 0
+                    for c in reversed(current_chunk):
+                        size = self._estimate_tokens(c)
+                        if overlap_size + size <= overlap_tokens:
+                            overlap_content.insert(0, c)
+                            overlap_size += size
+                        else:
+                            break
+                    current_chunk = overlap_content
+                else:
+                    current_chunk = []
+                    
+                current_chunk.append(content)
+                current_tokens = sum(self._estimate_tokens(c) for c in current_chunk)
+                
+        # Add final chunk
+        if current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+            
+        return chunks
+
+

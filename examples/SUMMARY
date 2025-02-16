@@ -1,0 +1,40 @@
+---
+File: examples/chunking-service.yaml
+---
+# examples/chunking-service.yaml
+name: Process Documents
+
+on:
+  push:
+    paths:
+      - 'documents/**'
+
+jobs:
+  chunk:
+    runs-on: ubuntu-latest
+    
+    # Define the chunking service
+    services:
+      chunker:
+        image: ghcr.io/dmarx/tei-chunker:latest
+        ports:
+          - 8000:8000
+        # Mount documents directory
+        volumes:
+          - ./documents:/data/documents
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      # Example of using the service
+      - name: Chunk documents
+        run: |
+          # Process each TEI file
+          for file in documents/*.tei.xml; do
+            curl -X POST \
+              -H "Content-Type: application/xml" \
+              --data-binary "@$file" \
+              http://localhost:8000/chunk
+          done
+
+
