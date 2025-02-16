@@ -15,6 +15,8 @@ from .interfaces import (
     SynthesisStrategy
 )
 
+.strategies import TopDownStrategy, BottomUpStrategy, HybridStrategy
+
 class FeatureAwareProcessor:
     """
     Document processor with feature awareness but clean boundaries.
