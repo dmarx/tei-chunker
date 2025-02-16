@@ -76,7 +76,9 @@ class FeatureSynthesizer(Synthesizer):
         def process_node(node: SynthesisNode) -> str:
             context = self.format_for_llm(
                 node,
-                feature_types=["summary", "key_findings"]        
+                feature_types=["summary", "key_findings"],
+                # ... possibly missing args?
+            )
             return prompt.format(
                 structure=self._format_structure(node),
                 features=context
