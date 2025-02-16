@@ -100,7 +100,23 @@ class BottomUpStrategy(SynthesisStrategy):
                 parts.append(f"\n\n{feat_type}: {feat.content}")
                 
         return "\n\n".join(parts)
-
+        
+    def _get_relevant_features(
+        self,
+        span: Span,
+        features: Dict[str, List[Feature]]
+    ) -> Dict[str, List[Feature]]:
+        """Get features relevant to a span."""
+        relevant = {}
+        for name, feature_list in features.items():
+            relevant_features = [
+                f for f in feature_list
+                if f.span.start < span.end and f.span.end > span.start
+            ]
+            if relevant_features:
+                relevant[name] = relevant_features
+        return relevant
+        
 class HybridStrategy(SynthesisStrategy):
     """Try top-down first, fall back to bottom-up when needed."""
     
