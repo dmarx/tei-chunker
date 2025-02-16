@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Any
 from datetime import datetime
 
-from tei_chunker.core.interfaces import Strategy, Feature, Span
+# tests/test_feature_manager.py
+from tei_chunker.core.strategies import Strategy
+from tei_chunker.core.interfaces import Feature, Span
 from tei_chunker.features.manager import (
     FeatureManager,
     FeatureStore,
