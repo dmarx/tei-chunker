@@ -9,7 +9,11 @@ from datetime import datetime
 
 from tei_chunker.graph import DocumentGraph, Node, Feature
 from tei_chunker.synthesis.base import Synthesizer, SynthesisNode
-from tei_chunker.synthesis.patterns import FeatureSynthesizer, SynthesisStrategy
+from tei_chunker.synthesis.patterns import (
+    FeatureSynthesizer,
+    SynthesisMode  # Changed from SynthesisStrategy
+)
+from tei_chunker.core.strategies import Strategy  # Add this import
 
 @pytest.fixture
 def sample_graph():
