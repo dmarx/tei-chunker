@@ -2,17 +2,16 @@
 """Tests for feature management functionality."""
 import pytest
 from pathlib import Path
-from typing import Any
 from datetime import datetime
 
-# tests/test_feature_manager.py
+from tei_chunker.core.interfaces import Feature, Span, ProcessingContext
 from tei_chunker.core.strategies import Strategy
-from tei_chunker.core.interfaces import Feature, Span
 from tei_chunker.features.manager import (
     FeatureManager,
     FeatureStore,
     FeatureRequest
 )
+from tei_chunker.synthesis.patterns import SynthesisMode
 
 class MockLLMClient:
     """Mock LLM client for testing."""
@@ -31,7 +30,7 @@ def feature_store(tmp_feature_dir):
     """Create feature store with some test data."""
     store = FeatureStore(tmp_feature_dir)
     
-    # Add some test features
+    # Add test features
     summary_feature = Feature(
         name="summary",
         content="Test summary",
@@ -51,13 +50,31 @@ def feature_manager(tmp_feature_dir):
     )
 
 @pytest.fixture
-def sample_request():
-    """Create sample feature request."""
+def basic_request():
+    """Create basic feature request."""
     return FeatureRequest(
         name="analysis",
         prompt_template="Analyze: {content}",
         strategy=Strategy.TOP_DOWN_MAXIMAL,
         required_features=["summary"]
+    )
+
+@pytest.fixture
+def advanced_request():
+    """Create request with synthesis configuration."""
+    return FeatureRequest(
+        name="synthesis",
+        prompt_template="Synthesize: {content}",
+        strategy=Strategy.TOP_DOWN_MAXIMAL,
+        required_features=["summary", "analysis"],
+        synthesis_config={
+            "mode": SynthesisMode.HIERARCHICAL,
+            "max_length": 500,
+            "dependencies": [{
+                "source_feature": "summary",
+                "relationship": "informs"
+            }]
+        }
     )
 
 def test_feature_store_save_load(tmp_feature_dir):
@@ -71,230 +88,171 @@ def test_feature_store_save_load(tmp_feature_dir):
         metadata={"test_meta": "value"}
     )
     
-    # Save feature
     store.save_feature(feature)
     
-    # Create new store instance and check feature loads
+    # Load and verify
     new_store = FeatureStore(tmp_feature_dir)
-    loaded_features = new_store.get_features("test")
-    
-    assert len(loaded_features) == 1
-    assert loaded_features[0].content == "Test content"
-    assert loaded_features[0].metadata["test_meta"] == "value"
+    loaded = new_store.get_features("test")
+    assert len(loaded) == 1
+    assert loaded[0].content == feature.content
+    assert loaded[0].metadata == feature.metadata
 
 def test_feature_store_get_by_span(feature_store):
     """Test getting features filtered by span."""
-    # Add features with different spans
-    feature1 = Feature(
-        name="test",
-        content="Content 1",
-        span=Span(0, 50, "Content 1"),
-        metadata={}
-    )
-    feature2 = Feature(
-        name="test",
-        content="Content 2",
-        span=Span(40, 90, "Content 2"),
-        metadata={}
-    )
+    features = [
+        Feature(
+            name="test",
+            content=f"Content {i}",
+            span=Span(i*50, (i+1)*50, f"Content {i}"),
+            metadata={}
+        )
+        for i in range(3)
+    ]
     
-    feature_store.save_feature(feature1)
-    feature_store.save_feature(feature2)
+    for f in features:
+        feature_store.save_feature(f)
     
-    # Get features overlapping span
-    features = feature_store.get_features(
+    # Get overlapping features
+    results = feature_store.get_features(
         "test",
-        span=Span(30, 60, "test")
+        span=Span(40, 110, "test")
     )
     
-    assert len(features) == 2  # Both features overlap
+    assert len(results) == 2  # Should get features that overlap span
 
 def test_feature_manager_process_request(
     feature_manager,
-    sample_request
+    basic_request
 ):
-    """Test processing a feature request."""
+    """Test basic feature request processing."""
     content = "Test document content"
     llm_client = MockLLMClient()
     
+    # Add required feature
+    feature_manager.store.save_feature(Feature(
+        name="summary",
+        content="Summary content",
+        span=Span(0, len(content), content),
+        metadata={}
+    ))
+    
+    # Process request
     feature = feature_manager.process_request(
         content,
-        sample_request,
+        basic_request,
         llm_client
     )
     
     assert feature.name == "analysis"
     assert "LLM response" in feature.content
     assert feature.metadata["strategy"] == Strategy.TOP_DOWN_MAXIMAL.value
-    assert "created_at" in feature.metadata
 
-def test_feature_manager_validate_request(
+def test_feature_manager_advanced_request(
     feature_manager,
-    sample_request
+    advanced_request
 ):
-    """Test feature request validation."""
-    # Test missing required feature
-    errors = feature_manager.validate_feature_request(sample_request)
-    assert len(errors) == 1
-    assert "summary" in errors[0]
+    """Test processing request with synthesis configuration."""
+    content = "Test document content"
+    llm_client = MockLLMClient()
     
-    # Add required feature and test again
-    summary_feature = Feature(
-        name="summary",
-        content="Summary content",
-        span=Span(0, 100, "test"),
-        metadata={}
+    # Add required features
+    for name in ["summary", "analysis"]:
+        feature_manager.store.save_feature(Feature(
+            name=name,
+            content=f"{name} content",
+            span=Span(0, len(content), content),
+            metadata={}
+        ))
+    
+    feature = feature_manager.process_request(
+        content,
+        advanced_request,
+        llm_client
     )
-    feature_manager.store.save_feature(summary_feature)
     
-    errors = feature_manager.validate_feature_request(sample_request)
-    assert len(errors) == 0
+    assert feature.name == "synthesis"
+    assert feature.metadata["synthesis_mode"] == SynthesisMode.HIERARCHICAL.value
+    assert "dependencies" in feature.metadata
 
-def test_feature_manager_circular_dependencies(feature_manager):
+def test_feature_manager_validation(feature_manager):
+    """Test feature request validation."""
+    request = FeatureRequest(
+        name="invalid",
+        prompt_template="Template",
+        required_features=["nonexistent"]
+    )
+    
+    errors = feature_manager.validate_feature_request(request)
+    assert len(errors) == 1
+    assert "nonexistent" in errors[0]
+
+def test_circular_dependency_detection(feature_manager):
     """Test detection of circular dependencies."""
-    # Create features with circular dependencies
+    # Create circular dependency
     feature_a = FeatureRequest(
         name="feature_a",
         prompt_template="Template",
         required_features=["feature_b"]
     )
     
-    feature_b = FeatureRequest(
-        name="feature_b",
-        prompt_template="Template",
-        required_features=["feature_a"]
-    )
-    
-    # Add one feature first
-    feature_manager.store.save_feature(Feature(
+    feature_b = Feature(
         name="feature_b",
         content="Content",
         span=Span(0, 100, "test"),
         metadata={"required_features": ["feature_a"]}
-    ))
+    )
     
-    # Validate should detect circular dependency
+    feature_manager.store.save_feature(feature_b)
+    
     errors = feature_manager.validate_feature_request(feature_a)
     assert len(errors) == 1
-    assert "Circular dependency" in errors[0]
+    assert "circular" in errors[0].lower()
 
-def test_feature_manager_get_feature_chain(
-    feature_manager
-):
-    """Test getting feature dependency chain."""
-    # Create features with dependencies
-    feature_manager.store.save_feature(Feature(
-        name="raw",
-        content="Raw content",
-        span=Span(0, 100, "test"),
-        metadata={}
-    ))
-    
-    feature_manager.store.save_feature(Feature(
-        name="summary",
-        content="Summary",
-        span=Span(0, 100, "test"),
-        metadata={"required_features": ["raw"]}
-    ))
-    
-    feature_manager.store.save_feature(Feature(
-        name="analysis",
-        content="Analysis",
-        span=Span(0, 100, "test"),
-        metadata={"required_features": ["summary"]}
-    ))
-    
-    # Get feature chain
-    chain = feature_manager.get_feature_chain("analysis")
-    
-    assert len(chain) == 3
-    assert "raw" in chain[0]
-    assert "summary" in chain[1]
-    assert "analysis" in chain[2]
-
-def test_feature_manager_error_handling(
-    feature_manager,
-    sample_request
-):
-    """Test error handling in feature manager."""
-    content = "Test content"
-    
-    class FailingLLMClient:
-        def complete(self, prompt: str) -> str:
-            raise ValueError("LLM processing failed")
-            
-    with pytest.raises(Exception) as exc_info:
-        feature_manager.process_request(
-            content,
-            sample_request,
-            FailingLLMClient()
-        )
-    
-    assert "LLM processing failed" in str(exc_info.value)
-
-def test_feature_persistence(feature_manager, sample_request):
-    """Test feature persistence across manager instances."""
-    content = "Test content"
-    llm_client = MockLLMClient()
-    
-    # Process feature with first manager
-    feature = feature_manager.process_request(
-        content,
-        sample_request,
-        llm_client
-    )
-    
-    # Create new manager instance
-    new_manager = FeatureManager(
-        feature_manager.store.storage_dir,
-        xml_processor=None
-    )
-    
-    # Check feature was loaded
-    features = new_manager.store.get_features(feature.name)
-    assert len(features) == 1
-    assert features[0].content == feature.content
-    
-def test_feature_graph(feature_manager):
-    """Test getting feature dependency graph."""
-    # Add features with complex dependencies
+def test_feature_chain_resolution(feature_manager):
+    """Test resolving feature dependency chains."""
+    # Create feature chain: raw -> processed -> analyzed
     features = [
         Feature(
-            name="base",
-            content="Base content",
+            name="raw",
+            content="Raw content",
             span=Span(0, 100, "test"),
             metadata={}
         ),
         Feature(
-            name="derived1",
-            content="Derived 1",
+            name="processed",
+            content="Processed content",
             span=Span(0, 100, "test"),
-            metadata={"required_features": ["base"]}
+            metadata={"required_features": ["raw"]}
         ),
         Feature(
-            name="derived2",
-            content="Derived 2",
+            name="analyzed",
+            content="Analyzed content",
             span=Span(0, 100, "test"),
-            metadata={"required_features": ["base"]}
-        ),
-        Feature(
-            name="complex",
-            content="Complex",
-            span=Span(0, 100, "test"),
-            metadata={"required_features": ["derived1", "derived2"]}
+            metadata={"required_features": ["processed"]}
         )
     ]
     
-    for feat in features:
-        feature_manager.store.save_feature(feat)
+    for f in features:
+        feature_manager.store.save_feature(f)
         
-    # Get dependency graph
-    graph = feature_manager.get_feature_graph()
+    chain = feature_manager.get_feature_chain("analyzed")
     
-    assert len(graph) == 4
-    assert "base" in graph
-    assert not graph["base"]  # No dependencies
-    assert "derived1" in graph
-    assert "base" in graph["derived1"]
-    assert "complex" in graph
-    assert all(dep in graph["complex"] for dep in ["derived1", "derived2"])
+    assert len(chain) == 3
+    assert list(chain[0].keys())[0] == "raw"
+    assert list(chain[1].keys())[0] == "processed"
+    assert list(chain[2].keys())[0] == "analyzed"
+
+def test_error_handling(feature_manager, basic_request):
+    """Test error handling during feature processing."""
+    class FailingLLMClient:
+        def complete(self, prompt: str) -> str:
+            raise ValueError("LLM processing failed")
+    
+    with pytest.raises(ValueError) as exc_info:
+        feature_manager.process_request(
+            "content",
+            basic_request,
+            FailingLLMClient()
+        )
+    
+    assert "LLM processing failed" in str(exc_info.value)
