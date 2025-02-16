@@ -1,14 +1,15 @@
 # tei_chunker/synthesis/base.py
 """
 Base classes for document synthesis.
-File: tei_chunker/synthesis/base.py
 """
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any, Callable
+from typing import List, Dict, Optional, Any, Callable, Set
 from pathlib import Path
+from datetime import datetime, timezone
 from loguru import logger
 
-from ..graph import DocumentGraph, Node, Feature
+from ..core.interfaces import Feature, Span
+from ..graph import DocumentGraph, Node
 
 @dataclass
 class SynthesisNode:
@@ -22,13 +23,13 @@ class SynthesisNode:
     
     def get_feature_content(self, feature_type: str) -> List[str]:
         """Get all content of a specific feature type in this subtree."""
-        content = []
+        content: List[str] = []
         
-        # Get features from this node
-        if features := self.metadata.get('features', {}).get(feature_type, []):
-            content.extend(f['content'] for f in features)
+        # Get features from this node's metadata
+        features = self.metadata.get('features', {}).get(feature_type, [])
+        if features:
+            content.extend(feat.content for feat in features)
             
-        # Get features from children
         for child in self.children:
             content.extend(child.get_feature_content(feature_type))
             
@@ -40,7 +41,7 @@ class SynthesisNode:
         
         for overlap in self.overlapping:
             if features := overlap.metadata.get('features', {}).get(feature_type, []):
-                content.extend(f['content'] for f in features)
+                content.extend(feat.content for feat in features)
                 
         return content
 
@@ -56,9 +57,21 @@ class Synthesizer:
         self,
         root_node: Node,
         feature_types: List[str],
-        max_depth: Optional[int] = None
+        max_depth: Optional[int] = None,
+        visited: Optional[Set[str]] = None
     ) -> SynthesisNode:
         """Build synthesis tree from document graph."""
+        # Initialize visited set if not provided
+        if visited is None:
+            visited = set()
+            
+        # Check if we've already visited this node
+        if root_node.id in visited:
+            return None  # Skip to avoid cycles
+            
+        # Add node to visited set
+        visited.add(root_node.id)
+        
         # Check cache
         cache_key = f"{root_node.id}:{':'.join(feature_types)}:{max_depth}"
         if cache_key in self.synthesis_cache:
@@ -78,26 +91,28 @@ class Synthesizer:
             next_depth = max_depth - 1 if max_depth else None
             for child_id in root_node.children:
                 if child := self.graph.nodes.get(child_id):
-                    child_tree = self.get_synthesis_tree(
+                    if child_tree := self.get_synthesis_tree(
                         child,
                         feature_types,
-                        next_depth
-                    )
-                    children.append(child_tree)
+                        next_depth,
+                        visited.copy()  # Pass copy of visited set
+                    ):
+                        children.append(child_tree)
                     
         # Get overlapping nodes
         overlapping = []
         overlap_nodes = self.graph.get_overlapping_nodes(
             root_node.span,
-            exclude_ids={root_node.id}
+            exclude_ids={root_node.id} | visited  # Exclude already visited nodes
         )
         for node in overlap_nodes:
-            overlap_tree = self.get_synthesis_tree(
+            if overlap_tree := self.get_synthesis_tree(
                 node,
                 feature_types,
-                max_depth=1  # Limit overlap depth
-            )
-            overlapping.append(overlap_tree)
+                max_depth=1,  # Limit overlap depth
+                visited=visited.copy()  # Pass copy of visited set
+            ):
+                overlapping.append(overlap_tree)
             
         # Create synthesis node
         syn_node = SynthesisNode(
@@ -145,7 +160,6 @@ class Synthesizer:
             
             # Add to graph
             self.graph.add_node(
-          # tei_chunker/synthesis/base.py (continued)
                 content=synthesized,
                 type=f"feature:{feature_name}",
                 span=node.metadata['span'],
@@ -155,7 +169,7 @@ class Synthesizer:
                         n.node_id for n in node.children + node.overlapping
                     ],
                     'feature_version': version,
-                    'synthesized_at': datetime.utcnow().isoformat()
+                    'synthesized_at': datetime.now(timezone.utc).isoformat()
                 }
             )
             

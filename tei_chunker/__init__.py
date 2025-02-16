@@ -6,7 +6,7 @@ from .__about__ import __version__
 
 from .graph import DocumentGraph, Node, Feature
 from .synthesis.base import Synthesizer, SynthesisNode
-from .synthesis.patterns import FeatureSynthesizer, SynthesisStrategy
+from .synthesis.patterns import FeatureSynthesizer, SynthesisMode, FeatureDependency
 from .synthesis.prompts import SynthesisPrompt, PromptTemplates
 
 __all__ = [
@@ -17,7 +17,8 @@ __all__ = [
     "Synthesizer",
     "SynthesisNode",
     "FeatureSynthesizer",
-    "SynthesisStrategy",
+    "SynthesisMode",
+    "FeatureDependency",
     "SynthesisPrompt",
     "PromptTemplates"
 ]

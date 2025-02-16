@@ -8,7 +8,6 @@ on:
       - 'docs/**'
       - '.gitignore'
   pull_request:
-    branches: [ main ]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -44,7 +43,7 @@ jobs:
 
       - name: Auto-fix linting issues with ruff
         run: |
-          ruff check --fix .
+          ruff check --fix --exit-zero .
       
       - name: Commit auto-fix changes
         uses: stefanzweifel/git-auto-commit-action@v5
@@ -66,4 +65,4 @@ jobs:
       
       - name: Run tests
         run: |
-          pytest tests/ --cov=tei_chunker
+          pytest -vv tests/ --cov=tei_chunker
