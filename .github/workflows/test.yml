@@ -65,4 +65,4 @@ jobs:
       
       - name: Run tests
         run: |
-          pytest -vv --showlocals tests/ --cov=tei_chunker
+          pytest -vv tests/ --cov=tei_chunker
