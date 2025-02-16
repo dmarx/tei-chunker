@@ -3,18 +3,9 @@
 import pytest
 from typing import Dict, List
 
-from tei_chunker.core.interfaces import (
-    Strategy,
-    ProcessingContext,
-    Feature,
-    Span,
-    ContentProcessor
-)
-from tei_chunker.core.strategies import (
-    TopDownStrategy,
-    BottomUpStrategy,
-    HybridStrategy
-)
+from tei_chunker.core.strategies import Strategy, TopDownStrategy, BottomUpStrategy, HybridStrategy
+from tei_chunker.core.interfaces import ProcessingContext, Feature, Span, ContentProcessor
+
 
 @pytest.fixture
 def context():
