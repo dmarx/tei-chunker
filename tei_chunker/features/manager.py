@@ -17,6 +17,7 @@ from ..core.interfaces import (
     ContentProcessor
 )
 from ..core.processor import FeatureAwareProcessor
+from ..core.strategies import TopDownStrategy 
 
 @dataclass
 class FeatureRequest:
@@ -37,7 +38,7 @@ class FeatureStore:
         self.storage_dir = Path(storage_dir)
         self.features: Dict[str, List[Feature]] = {}
         self._load_features()
-        
+    
     def _load_features(self) -> None:
         """Load existing features from storage."""
         if not self.storage_dir.exists():
@@ -57,17 +58,18 @@ class FeatureStore:
                     
                 try:
                     content = content_file.read_text()
-                    metadata = json.loads(meta_file.read_text())
+                    meta_data = json.loads(meta_file.read_text())
                     
+                    span_data = meta_data['span']
                     feature = Feature(
                         name=feature_type,
                         content=content,
                         span=Span(
-                            start=metadata['span']['start'],
-                            end=metadata['span']['end'],
-                            text=content
+                            start=span_data['start'],
+                            end=span_data['end'],
+                            text=span_data['text']
                         ),
-                        metadata=metadata['metadata']
+                        metadata=meta_data['metadata']
                     )
                     self.features[feature_type].append(feature)
                 except Exception as e:
@@ -75,6 +77,14 @@ class FeatureStore:
                     
     def save_feature(self, feature: Feature) -> None:
         """Save a feature to storage."""
+        # Ensure features list exists
+        if feature.name not in self.features:
+            self.features[feature.name] = []
+            
+        # Add to memory
+        self.features[feature.name].append(feature)
+        
+        # Save to disk
         feature_dir = self.storage_dir / feature.name
         feature_dir.mkdir(parents=True, exist_ok=True)
         
@@ -86,13 +96,15 @@ class FeatureStore:
         
         # Save metadata
         meta_path = feature_dir / f"{timestamp}.json"
-        meta_path.write_text(json.dumps({
+        meta_data = {
             'span': {
                 'start': feature.span.start,
-                'end': feature.span.end
+                'end': feature.span.end,
+                'text': feature.span.text
             },
             'metadata': feature.metadata
-        }, indent=2))
+        }
+        meta_path.write_text(json.dumps(meta_data, indent=2))
         
     def get_features(
         self,
@@ -104,9 +116,10 @@ class FeatureStore:
         if span is None:
             return features
             
+        # Filter by overlapping spans
         return [
             f for f in features
-            if f.span.start < span.end and f.span.end > span.start
+            if (f.span.start < span.end and f.span.end > span.start)
         ]
 
 class FeatureManager:
